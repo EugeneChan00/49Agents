@@ -14,6 +14,7 @@ export const MSG = {
   TERMINAL_DETACH: 'terminal:detach',
   TERMINAL_DETACHED: 'terminal:detached',
   TERMINAL_ERROR: 'terminal:error',
+  TERMINAL_REFRESH_HISTORY: 'terminal:refreshHistory',
 
   // Claude states
   CLAUDE_STATES: 'claude:states',

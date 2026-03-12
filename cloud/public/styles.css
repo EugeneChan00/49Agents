@@ -1658,6 +1658,31 @@ html, body {
   transform: scale(0.9);
 }
 
+.term-refresh-history {
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: rgba(180, 130, 255, 0.4);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: all 0.15s;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.term-refresh-history:hover {
+  background: rgba(99, 102, 241, 0.2);
+  color: rgba(180, 130, 255, 0.9);
+}
+
+.term-refresh-history:active {
+  transform: scale(0.9);
+}
+
 /* Beads tag inline input */
 .beads-tag-input {
   background: rgba(0, 0, 0, 0.6);

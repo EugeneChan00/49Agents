@@ -2159,6 +2159,11 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
       case 'terminal:history':
         if (payload.data) {
           const termInfo = terminals.get(payload.terminalId);
+          // If this is a refresh request, clear the buffer and re-inject
+          if (payload.refresh && termInfo) {
+            termInfo._historyLoaded = false;
+            termInfo.xterm.clear(); // wipe scrollback
+          }
           // Only inject history once per xterm instance. On WebSocket
           // reconnect the agent re-sends history, but the xterm buffer
           // already has it — writing it again causes duplicate content.
@@ -5023,6 +5028,7 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
         <span class="pane-title">${deviceTag}${beadsTag}<span style="opacity:0.7;">Terminal</span></span>
         <div class="pane-header-right">
           <button class="beads-tag-btn" aria-label="Set beads issue" data-tooltip="Set beads issue"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="0">${ICON_BEADS}</svg></button>
+          <button class="term-refresh-history" aria-label="Reload history" data-tooltip="Reload history"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 3a7 7 0 1 0 1 5"/><polyline points="14 1 14 5 10 5"/></svg></button>
           <div class="pane-zoom-controls">
             <button class="pane-zoom-btn zoom-out" data-tooltip="Zoom out">−</button>
             <button class="pane-zoom-btn zoom-in" data-tooltip="Zoom in">+</button>
@@ -7476,6 +7482,22 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
       });
     }
 
+    // Refresh history button (terminal panes only)
+    const refreshHistoryBtn = paneEl.querySelector('.term-refresh-history');
+    if (refreshHistoryBtn) {
+      refreshHistoryBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const termInfo = terminals.get(paneData.id);
+        if (termInfo) {
+          sendWs('terminal:refreshHistory', {
+            terminalId: paneData.id,
+            cols: termInfo.xterm.cols,
+            rows: termInfo.xterm.rows
+          }, paneData.agentId);
+        }
+      });
+    }
+
     // Beads tag removal via X button
     paneEl.addEventListener('click', (e) => {
       const removeBtn = e.target.closest('.beads-tag-remove');
@@ -8220,22 +8242,13 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
       navigator.vibrate(30);
     }
 
-    // Debounced fit function (only for terminals)
-    let fitTimeout = null;
+    // During drag resize we must NOT call fitAddon.fit() continuously —
+    // each fit() clears xterm's render state and triggers a tmux resize,
+    // but before tmux can finish repainting, the next fit() clears it again.
+    // This leaves stale content in parts of the terminal that never get
+    // repainted. Instead, we only fit once when the drag ends (endHandler).
     const debouncedFit = () => {
-      if (paneData.type === 'file' || paneData.type === 'git-graph' || paneData.type === 'beads' || paneData.type === 'folder') return; // Skip for non-terminal panes
-      if (fitTimeout) clearTimeout(fitTimeout);
-      fitTimeout = setTimeout(() => {
-        const termInfo = terminals.get(paneData.id);
-        if (termInfo) {
-          try {
-            if (termInfo.safeFitAndSync) termInfo.safeFitAndSync();
-            else termInfo.fitAddon.fit();
-          } catch (e) {
-            // Ignore fit errors
-          }
-        }
-      }, 50);
+      // No-op during drag — fit happens in endHandler only
     };
 
     const moveHandler = (moveE) => {
@@ -8279,20 +8292,31 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
       document.body.classList.remove('no-select');
       hideIframeOverlays();
 
-      // Final fit after resize ends (only for terminals)
+      // Final fit after resize ends (only for terminals).
+      // This is the ONLY fit that should happen during a resize operation —
+      // intermediate fits during drag are disabled to prevent render corruption.
       if (paneData.type === 'terminal') {
         const termInfo = terminals.get(paneData.id);
         if (termInfo) {
           try {
             if (termInfo.safeFitAndSync) termInfo.safeFitAndSync();
             else termInfo.fitAddon.fit();
-            // safeFitAndSync already schedules a sync, but send immediately
-            // as a belt-and-suspenders for manual resize end
+            // Send resize immediately
             sendWs('terminal:resize', {
               terminalId: paneData.id,
               cols: termInfo.xterm.cols,
               rows: termInfo.xterm.rows
             }, paneData.agentId);
+            // Re-fetch history from server to fix any render corruption
+            // caused by the resize. Delay slightly so tmux has time to
+            // process the new dimensions first.
+            setTimeout(() => {
+              sendWs('terminal:refreshHistory', {
+                terminalId: paneData.id,
+                cols: termInfo.xterm.cols,
+                rows: termInfo.xterm.rows
+              }, paneData.agentId);
+            }, 300);
           } catch (e) {
             // Ignore fit errors
           }
