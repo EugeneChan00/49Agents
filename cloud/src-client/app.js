@@ -2461,7 +2461,18 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
         }
         // Load panes from newly connected agent onto the canvas
         if (!state.panes.some(p => p.agentId === newAgentId)) {
-          loadPanesFromAgent(newAgentId).catch(e => console.error('Failed to load panes from new agent:', e));
+          (async () => {
+            try {
+              let cloudLayoutMap = new Map();
+              const cloudData = await cloudFetch('GET', '/api/layouts').catch(() => null);
+              if (cloudData?.layouts?.length > 0) {
+                cloudLayoutMap = new Map(cloudData.layouts.map(l => [l.id, l]));
+              }
+              await loadPanesFromAgent(newAgentId, cloudLayoutMap);
+            } catch (e) {
+              console.error('Failed to load panes from new agent:', e);
+            }
+          })();
         }
         // Remove offline styling and re-attach terminals for this agent's panes
         state.panes.filter(p => p.agentId === newAgentId).forEach(p => {
