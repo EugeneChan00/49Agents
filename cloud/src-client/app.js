@@ -135,18 +135,67 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
   function updateShortcutBadge(paneData) {
     const paneEl = document.getElementById(`pane-${paneData.id}`);
     if (!paneEl) return;
-    const oldBadge = paneEl.querySelector('.pane-shortcut-badge');
-    if (oldBadge) oldBadge.remove();
+    // Remove any existing badge or input
+    paneEl.querySelectorAll('.pane-shortcut-badge').forEach(el => el.remove());
     if (paneData.shortcutNumber) {
       const headerRight = paneEl.querySelector('.pane-header-right');
       if (headerRight) {
         const badge = document.createElement('span');
         badge.className = 'pane-shortcut-badge';
-        badge.dataset.tooltip = `Tab+${paneData.shortcutNumber} to jump here (click to reassign)`;
+        badge.dataset.tooltip = `Tab+${paneData.shortcutNumber} (click to reassign)`;
         badge.textContent = paneData.shortcutNumber;
         headerRight.insertBefore(badge, headerRight.firstChild);
       }
     }
+  }
+
+  // Shortcut assign popup — floating overlay that captures a single keypress
+  let shortcutPopup = null;
+  function showShortcutAssignPopup(paneData) {
+    closeShortcutAssignPopup();
+    const paneEl = document.getElementById(`pane-${paneData.id}`);
+    if (!paneEl) return;
+    const badge = paneEl.querySelector('.pane-shortcut-badge');
+    if (!badge) return;
+
+    const rect = badge.getBoundingClientRect();
+    const popup = document.createElement('div');
+    popup.className = 'shortcut-assign-popup';
+    popup.innerHTML = `<span class="shortcut-assign-label">Press 1-9</span>`;
+    popup.style.left = `${rect.left + rect.width / 2}px`;
+    popup.style.top = `${rect.bottom + 6}px`;
+    document.body.appendChild(popup);
+
+    const onKey = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'Escape') {
+        closeShortcutAssignPopup();
+        return;
+      }
+      if (e.key >= '1' && e.key <= '9') {
+        reassignShortcutNumber(paneData, parseInt(e.key, 10));
+        closeShortcutAssignPopup();
+      }
+    };
+    const onClickOutside = (e) => {
+      if (!popup.contains(e.target)) {
+        closeShortcutAssignPopup();
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    setTimeout(() => document.addEventListener('mousedown', onClickOutside, true), 0);
+
+    shortcutPopup = { popup, onKey, onClickOutside };
+  }
+
+  function closeShortcutAssignPopup() {
+    if (!shortcutPopup) return;
+    const { popup, onKey, onClickOutside } = shortcutPopup;
+    popup.remove();
+    document.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('mousedown', onClickOutside, true);
+    shortcutPopup = null;
   }
 
   // ── Minimap ──────────────────────────────────────────────────────────
@@ -227,7 +276,7 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
 
     if (state.panes.length === 0) {
       wrap.style.display = 'none';
-      minimapVisible = false;
+      if (minimapVisible) { minimapVisible = false; document.body.classList.add('minimap-hidden'); }
       return;
     }
 
@@ -236,6 +285,7 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
       if (minimapVisible) {
         wrap.style.display = 'none';
         minimapVisible = false;
+        document.body.classList.add('minimap-hidden');
       }
       return;
     }
@@ -243,6 +293,7 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
     if (!minimapVisible) {
       wrap.style.display = 'block';
       minimapVisible = true;
+      document.body.classList.remove('minimap-hidden');
     }
 
     const bounds = getCanvasBounds();
@@ -353,6 +404,7 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
       minimapEls.wrap.style.display = 'none';
       minimapVisible = false;
     }
+    document.body.classList.add('minimap-hidden');
   }
 
   // Single loop: renders at 60fps when visible, polls at 5fps when hidden
@@ -405,7 +457,7 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
   function isExternalInputFocused() {
     const el = document.activeElement;
     if (!el || el === document.body) return false;
-    if (el.closest('.pane')) return el.classList.contains('beads-tag-input') || el.classList.contains('pane-shortcut-input');
+    if (el.closest('.pane')) return el.classList.contains('beads-tag-input');
     const tag = el.tagName;
     return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
   }
@@ -7952,40 +8004,15 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
 
     const applyZoom = () => applyPaneZoom(paneData, paneEl);
 
-    // Shortcut badge click: reassign number (delegated so it works after badge replacement)
+    // Shortcut badge click: open assign popup (delegated so it works after badge replacement)
     paneEl.addEventListener('click', (e) => {
       const badge = e.target.closest('.pane-shortcut-badge');
       if (!badge) return;
       e.stopPropagation();
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.maxLength = 1;
-      input.className = 'pane-shortcut-input';
-      input.value = paneData.shortcutNumber || '';
-      badge.replaceWith(input);
-      input.focus();
-      input.select();
-      let committed = false;
-      const commit = () => {
-        if (committed) return;
-        committed = true;
-        const val = parseInt(input.value, 10);
-        if (val >= 1 && val <= 9) {
-          reassignShortcutNumber(paneData, val);
-        }
-        updateShortcutBadge(paneData);
-      };
-      input.addEventListener('keydown', (ev) => {
-        ev.stopPropagation();
-        if (ev.key === 'Enter' || ev.key === 'Escape') {
-          if (ev.key === 'Escape') input.value = '';
-          commit();
-        }
-      });
-      input.addEventListener('blur', commit);
+      showShortcutAssignPopup(paneData);
     });
     paneEl.addEventListener('mousedown', (e) => {
-      if (e.target.closest('.pane-shortcut-badge') || e.target.closest('.pane-shortcut-input')) {
+      if (e.target.closest('.pane-shortcut-badge')) {
         e.stopPropagation();
       }
     });
