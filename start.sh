@@ -18,6 +18,9 @@ echo -e "${YELLOW}Installing dependencies...${NC}"
 (cd agent && npm install --silent)
 echo -e "${YELLOW}Building client assets...${NC}"
 (cd cloud && npm run build --silent)
+echo -e "${YELLOW}Building agent tarball...${NC}"
+mkdir -p cloud/dl
+tar czf cloud/dl/49-agent.tar.gz agent/
 echo -e "${GREEN}Done.${NC}"
 echo ""
 
