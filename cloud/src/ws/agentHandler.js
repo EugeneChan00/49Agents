@@ -94,6 +94,7 @@ export function handleAgentConnection(ws, userAgents, userBrowsers, latestAgentV
             userAgents.get(userId).set(agentId, {
               ws,
               hostname: msg.payload.hostname || 'unknown',
+              displayName: agentRecord?.display_name || null,
               os: agentOs,
               version: msg.payload.version || null,
               createdAt,
@@ -120,6 +121,7 @@ export function handleAgentConnection(ws, userAgents, userBrowsers, latestAgentV
               payload: {
                 agentId,
                 hostname: msg.payload.hostname,
+                displayName: agentRecord?.display_name || null,
                 os: agentOs,
                 version: msg.payload.version,
                 createdAt,

@@ -1128,14 +1128,14 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
       }
 
       return `
-        <div class="hud-device" data-device="${escapeHtml(device.name)}">
+        <div class="hud-device" data-device="${escapeHtml(device.name)}" data-agent-id="${escapeHtml(device.ip)}">
           <div class="hud-device-row">
             <span class="hud-status-dot ${dotClass}"></span>
             ${icon}
             <span class="hud-device-name">${escapeHtml(device.name)}</span>
             ${versionDotHtml}
             ${countsHtml}
-            <button class="hud-device-delete" data-device="${escapeHtml(device.name)}" data-tooltip="Remove machine">
+            <button class="hud-device-delete" data-agent-id="${escapeHtml(device.ip)}" data-tooltip="Remove machine">
               <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h12"/><path d="M5.5 4V2.5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1V4"/><path d="M12.5 4v9a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 13V4"/></svg>
             </button>
           </div>
@@ -1235,9 +1235,10 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
     content.querySelectorAll('.hud-device-delete').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        const deviceName = btn.dataset.device;
-        const agentEntry = agents.find(a => a.hostname === deviceName);
+        const agentId = btn.dataset.agentId;
+        const agentEntry = agents.find(a => a.agentId === agentId);
         if (!agentEntry) return;
+        const deviceName = agentEntry.displayName || agentEntry.hostname || agentId;
 
         if (!confirm(`Remove "${deviceName}" and all its panes? This cannot be undone.`)) return;
 
@@ -1281,16 +1282,78 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
             if (fpInfo?.refreshInterval) clearInterval(fpInfo.refreshInterval);
             folderPanes.delete(pane.id);
           }
-          state.panes = state.panes.filter(p => p.agentId !== agentEntry.agentId && p.device !== deviceName);
+          state.panes = state.panes.filter(p => p.agentId !== agentEntry.agentId);
 
           // Remove agent from local state
           agents = agents.filter(a => a.agentId !== agentEntry.agentId);
-          hudData.devices = hudData.devices.filter(d => d.name !== deviceName);
+          hudData.devices = hudData.devices.filter(d => d.ip !== agentId);
           renderHud();
         } catch (err) {
           console.error('[App] Failed to delete machine:', err);
           alert('Failed to remove machine. Please try again.');
         }
+      });
+    });
+
+    // Double-click device name to rename
+    content.querySelectorAll('.hud-device-name').forEach(nameEl => {
+      nameEl.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const card = nameEl.closest('.hud-device');
+        if (!card) return;
+        const agentId = card.dataset.agentId;
+        const agentEntry = agents.find(a => a.agentId === agentId);
+        if (!agentEntry) return;
+
+        // Prevent multiple inputs
+        if (card.querySelector('.hud-device-name-input')) return;
+
+        const input = document.createElement('input');
+        input.className = 'hud-device-name-input';
+        input.type = 'text';
+        input.value = agentEntry.displayName || agentEntry.hostname || '';
+        input.placeholder = agentEntry.hostname || 'Name';
+        input.maxLength = 50;
+        input.style.cssText = 'background:rgba(255,255,255,0.1);border:1px solid rgba(255,235,150,0.5);color:#fff;font-size:11px;font-family:monospace;padding:1px 4px;border-radius:3px;width:100px;outline:none;';
+
+        nameEl.style.display = 'none';
+        nameEl.parentNode.insertBefore(input, nameEl.nextSibling);
+        input.focus();
+        input.select();
+
+        const commit = async () => {
+          const val = input.value.trim();
+          input.remove();
+          nameEl.style.display = '';
+
+          // If cleared or same as hostname, set to null (revert to hostname)
+          const newDisplayName = (val && val !== agentEntry.hostname) ? val : null;
+          if (newDisplayName === (agentEntry.displayName || null)) return; // No change
+
+          try {
+            await cloudFetch('PATCH', `/api/agents/${agentId}`, { displayName: newDisplayName || '' });
+            agentEntry.displayName = newDisplayName;
+            nameEl.textContent = newDisplayName || agentEntry.hostname || agentId;
+            card.dataset.device = nameEl.textContent;
+            // Update hudData too
+            const hudDevice = hudData.devices.find(d => d.ip === agentId);
+            if (hudDevice) hudDevice.name = nameEl.textContent;
+          } catch (err) {
+            console.error('[App] Failed to rename machine:', err);
+          }
+        };
+
+        input.addEventListener('blur', commit);
+        input.addEventListener('keydown', (ke) => {
+          if (ke.key === 'Enter') { ke.preventDefault(); input.blur(); }
+          if (ke.key === 'Escape') {
+            input.value = agentEntry.displayName || agentEntry.hostname || '';
+            input.blur();
+          }
+          ke.stopPropagation();
+        });
+        input.addEventListener('mousedown', (me) => me.stopPropagation());
       });
     });
 
@@ -3825,7 +3888,8 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
   function updateAgentsHud() {
     // Re-render the Machines HUD with agent data mapped to device format
     hudData.devices = agents.map(a => ({
-      name: a.hostname || a.agentId,
+      name: a.displayName || a.hostname || a.agentId,
+      hostname: a.hostname,
       ip: a.agentId,
       os: a.os || 'linux',
       online: a.online !== false,
@@ -3856,7 +3920,8 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
   // Helper: get devices list from local agents array (replaces fetch('/api/devices'))
   function getDevicesFromAgents() {
     return agents.filter(a => a.online).map(a => ({
-      name: a.hostname || a.agentId,
+      name: a.displayName || a.hostname || a.agentId,
+      hostname: a.hostname,
       ip: a.agentId,
       os: a.os || 'linux',
       online: a.online !== false,

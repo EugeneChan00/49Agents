@@ -190,6 +190,7 @@ function getOnlineAgents(userId, userAgents) {
   return Array.from(agents.entries()).map(([agentId, info]) => ({
     agentId,
     hostname: info.hostname,
+    displayName: info.displayName || null,
     os: info.os,
     version: info.version,
     online: true,

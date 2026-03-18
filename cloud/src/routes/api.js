@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'crypto';
 import { requireAuth } from '../auth/middleware.js';
-import { getAgentsByUser, getAgentById, registerAgent, deleteAgent } from '../db/agents.js';
+import { getAgentsByUser, getAgentById, registerAgent, deleteAgent, updateAgentDisplayName } from '../db/agents.js';
 import { deleteLayoutsByAgent } from '../db/layouts.js';
 import { generateAgentToken } from '../auth/agentAuth.js';
 import { getTierLimits } from '../billing/tiers.js';
@@ -163,6 +163,26 @@ export function setupApiRoutes(app) {
     deleteLayoutsByAgent(req.user.id, req.params.id);
     deleteAgent(req.params.id);
     res.json({ ok: true });
+  });
+
+  // PATCH /api/agents/:id — update agent display name
+  app.patch('/api/agents/:id', requireAuth, (req, res) => {
+    const agent = getAgentById(req.params.id);
+    if (!agent) {
+      return res.status(404).json({ error: 'Agent not found' });
+    }
+    if (agent.user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const { displayName } = req.body || {};
+    if (displayName !== undefined && displayName !== null && typeof displayName !== 'string') {
+      return res.status(400).json({ error: 'displayName must be a string' });
+    }
+
+    const trimmed = (displayName || '').trim().slice(0, 50);
+    updateAgentDisplayName(req.params.id, trimmed || null);
+    res.json({ ok: true, displayName: trimmed || null });
   });
 
   // -------------------------------------------------------------------------

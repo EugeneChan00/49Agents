@@ -155,6 +155,11 @@ export function initDatabase() {
     db.prepare("ALTER TABLE users ADD COLUMN guest_started_at TEXT").run();
   } catch (e) { /* already exists */ }
 
+  // Migration: display_name column on agents
+  try {
+    db.prepare("ALTER TABLE agents ADD COLUMN display_name TEXT").run();
+  } catch (e) { /* already exists */ }
+
   console.log(`[db] SQLite database initialized at ${config.dbPath}`);
   return db;
 }

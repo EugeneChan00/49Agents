@@ -65,6 +65,14 @@ export function updateLastSeen(agentId) {
 }
 
 /**
+ * Update the display name for an agent.
+ */
+export function updateAgentDisplayName(agentId, displayName) {
+  const db = getDb();
+  db.prepare('UPDATE agents SET display_name = ? WHERE id = ?').run(displayName || null, agentId);
+}
+
+/**
  * Delete an agent by ID.
  */
 export function deleteAgent(agentId) {

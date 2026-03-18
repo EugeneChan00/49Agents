@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS agents (
   id            TEXT PRIMARY KEY,
   user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   hostname      TEXT NOT NULL,
+  display_name  TEXT,
   os            TEXT,
   version       TEXT,
   token_hash    TEXT NOT NULL,
