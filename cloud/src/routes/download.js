@@ -8,6 +8,7 @@
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
+import { config } from '../config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const dlDir = resolve(__dirname, '..', '..', 'dl');
@@ -23,7 +24,7 @@ export function setupDownloadRoutes(app) {
   app.get('/dl/install.sh', (req, res) => {
     const proto = req.secure ? 'https' : 'http';
     const wsProto = req.secure ? 'wss' : 'ws';
-    const host = req.headers.host;
+    const host = config.cloudHost;
     const baseUrl = `${proto}://${host}`;
     const wsUrl = `${wsProto}://${host}`;
 
@@ -36,7 +37,7 @@ export function setupDownloadRoutes(app) {
   // GET /dl/install.ps1 — Dynamic PowerShell installer for Windows (WSL2)
   app.get('/dl/install.ps1', (req, res) => {
     const proto = req.secure ? 'https' : 'http';
-    const host = req.headers.host;
+    const host = config.cloudHost;
     const baseUrl = `${proto}://${host}`;
 
     const script = generatePowerShellInstaller(baseUrl);

@@ -57,14 +57,32 @@ if (landingDir && config.appHost) {
 // Reverse proxy support — trust X-Forwarded-* headers so req.secure,
 // req.protocol, and req.ip resolve correctly behind nginx / Cloudflare / etc.
 // ---------------------------------------------------------------------------
-app.set('trust proxy', true);
+app.set('trust proxy', 1);
 
 // ---------------------------------------------------------------------------
 // Security middleware
 // ---------------------------------------------------------------------------
 app.use(
   helmet({
-    contentSecurityPolicy: false, // CSP configured separately if needed
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: [
+          "'self'",
+          "'unsafe-inline'",  // Required for Monaco AMD loader config in index.html
+          "https://cdnjs.cloudflare.com",
+          "https://cdn.jsdelivr.net",
+        ],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+        fontSrc: ["'self'", "https://cdnjs.cloudflare.com", "data:"],
+        imgSrc: ["'self'", "data:", "blob:", "https:"],
+        connectSrc: ["'self'", "ws:", "wss:"],
+        workerSrc: ["'self'", "blob:"],  // Monaco web workers
+        frameSrc: ["'self'", "https:"],  // Iframe panes
+        objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+      },
+    },
     crossOriginEmbedderPolicy: false, // Allow embedding iframes in the canvas
   })
 );
@@ -126,7 +144,8 @@ setupAnalyticsRoutes(app);
 // Main app entry point (skip auth in dev mode)
 // ---------------------------------------------------------------------------
 const hasOAuth = config.github.clientId || config.google.clientId;
-if (!hasOAuth) {
+const devModeEnabled = !hasOAuth && config.nodeEnv !== 'production';
+if (devModeEnabled) {
   app.get('/', (req, res) => res.sendFile('index.html', { root: publicDir }));
 } else {
   app.get('/', requireAuth, (req, res) => res.sendFile('index.html', { root: publicDir }));

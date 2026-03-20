@@ -11,6 +11,8 @@ import { config } from '../config.js';
 import { upsertUser } from '../db/users.js';
 
 const hasOAuth = !!(config.github.clientId || config.google.clientId);
+const isProduction = config.nodeEnv === 'production';
+const devModeEnabled = !hasOAuth && !isProduction;
 
 function encodeSecret(secret) {
   return new TextEncoder().encode(secret);
@@ -27,8 +29,8 @@ function encodeSecret(secret) {
  * @throws If the token is invalid or expired
  */
 export async function verifyAgentToken(token) {
-  // Dev mode: no OAuth configured — accept 'dev' token without verification
-  if (!hasOAuth && token === 'dev') {
+  // Dev mode: no OAuth configured AND not production — accept 'dev' token without verification
+  if (devModeEnabled && token === 'dev') {
     const devUser = upsertUser({
       githubId: 'dev-0',
       githubLogin: 'dev-user',

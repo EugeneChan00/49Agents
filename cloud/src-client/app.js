@@ -6582,10 +6582,11 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
     }
   }
 
-  // Render markdown to HTML for preview mode
+  // Render markdown to HTML for preview mode (sanitized to prevent XSS)
   function renderMarkdownPreview(markdown) {
     if (window.marked) {
-      return window.marked.parse(markdown || '', { breaks: true, gfm: true });
+      const raw = window.marked.parse(markdown || '', { breaks: true, gfm: true });
+      return window.DOMPurify ? window.DOMPurify.sanitize(raw) : raw;
     }
     // Fallback: escape HTML and convert newlines
     return escapeHtml(markdown || '').replace(/\n/g, '<br>');

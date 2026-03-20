@@ -5,6 +5,8 @@ import { upsertUser } from '../db/users.js';
 import { config } from '../config.js';
 
 const hasOAuth = !!(config.github.clientId || config.google.clientId);
+const isProduction = config.nodeEnv === 'production';
+const devModeEnabled = !hasOAuth && !isProduction;
 
 /**
  * Express middleware that requires a valid JWT.
@@ -28,8 +30,8 @@ export function requireAuth(req, res, next) {
 }
 
 async function handleAuth(req, res, next) {
-  // Dev/local mode: no OAuth configured — auto-authenticate as dev user
-  if (!hasOAuth) {
+  // Dev/local mode: no OAuth configured AND not production — auto-authenticate as dev user
+  if (devModeEnabled) {
     const devUser = upsertUser({
       githubId: 'dev-0',
       githubLogin: 'dev-user',

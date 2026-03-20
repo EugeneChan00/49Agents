@@ -97,8 +97,9 @@ export function setupWebSocketRelay(server, options = {}) {
     zlibDeflateOptions: { level: 1 }, // fastest compression
     threshold: 128, // only compress messages > 128 bytes
   };
-  const browserWss = new WebSocketServer({ noServer: true, perMessageDeflate: wsCompression });
-  const agentWss = new WebSocketServer({ noServer: true, perMessageDeflate: wsCompression });
+  const maxPayload = 1 * 1024 * 1024; // 1 MB — prevents memory exhaustion from oversized messages
+  const browserWss = new WebSocketServer({ noServer: true, perMessageDeflate: wsCompression, maxPayload });
+  const agentWss = new WebSocketServer({ noServer: true, perMessageDeflate: wsCompression, maxPayload });
   const latestAgentVersion = options.latestAgentVersion || null;
 
   // Handle HTTP upgrade requests -- route to the correct WSS
@@ -113,7 +114,8 @@ export function setupWebSocketRelay(server, options = {}) {
         // Dev mode: always use the dev user — skip cookie auth entirely so
         // stale cookies from previous sessions don't cause a userId mismatch
         // with the agent (which also resolves to the same dev user).
-        if (!config.github.clientId) {
+        // Only enabled when no OAuth is configured AND not in production.
+        if (!config.github.clientId && config.nodeEnv !== 'production') {
           const devUser = upsertUser({
             githubId: 'dev-0',
             githubLogin: 'dev-user',

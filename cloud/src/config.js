@@ -1,3 +1,16 @@
+const nodeEnv = process.env.NODE_ENV || 'development';
+const isProduction = nodeEnv === 'production';
+
+// In production, JWT secrets MUST be set — refuse to start with known defaults
+if (isProduction) {
+  if (!process.env.JWT_SECRET) {
+    throw new Error('FATAL: JWT_SECRET must be set in production. Refusing to start with default secret.');
+  }
+  if (!process.env.AGENT_JWT_SECRET) {
+    throw new Error('FATAL: AGENT_JWT_SECRET must be set in production. Refusing to start with default secret.');
+  }
+}
+
 export const config = {
   port: parseInt(process.env.PORT || '1071'),
   host: process.env.HOST || '0.0.0.0',
@@ -25,5 +38,5 @@ export const config = {
     webhookUrl: process.env.DISCORD_WEBHOOK_URL || '',
   },
   adminUserId: process.env.ADMIN_USER_ID || '',
-  nodeEnv: process.env.NODE_ENV || 'development',
+  nodeEnv,
 };
