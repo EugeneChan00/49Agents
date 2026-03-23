@@ -2555,6 +2555,11 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
 
     // Update DOM (original logic)
     for (const [terminalId, info] of Object.entries(states)) {
+      // Track alternate screen state from tmux (authoritative source)
+      const termInfo = terminals.get(terminalId);
+      if (termInfo && info) {
+        termInfo._alternateOn = !!info.alternateOn;
+      }
       // Track claude terminals for HUD counts
       if (info && info.isClaude) claudeTerminalIds.add(terminalId);
       else claudeTerminalIds.delete(terminalId);
@@ -8174,6 +8179,8 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
     // When a TUI app (opencode, vim, htop, etc.) enables mouse reporting,
     // re-dispatch the wheel event on xterm's viewport so xterm.js sends
     // mouse escape sequences to the running application.
+    // When a TUI app is in alternate screen (reported by tmux via claude:states),
+    // send arrow keys so the app receives scroll as navigation.
     const XTERM_WHEEL = Symbol('xterm-wheel');
     container.addEventListener('wheel', (e) => {
       // Skip re-dispatched events from ourselves
@@ -8200,10 +8207,25 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
         return;
       }
 
-      // Default: scroll through xterm's buffer
       const lines = e.deltaMode === 1
         ? Math.round(e.deltaY * 1.125)
         : Math.round(e.deltaY / 33) || (e.deltaY > 0 ? 1 : -1);
+
+      // TUI app in alternate screen (tmux reports this via claude:states polling)
+      // — send arrow keys so the app scrolls its content
+      const termRef = terminals.get(paneData.id);
+      if (termRef?._alternateOn) {
+        const count = Math.abs(lines);
+        const arrow = e.deltaY > 0 ? '\x1b[B' : '\x1b[A';
+        if (termRef._attached) {
+          const seq = arrow.repeat(count);
+          const encoded = btoa(unescape(encodeURIComponent(seq)));
+          sendWs('terminal:input', { terminalId: paneData.id, data: encoded }, paneData.agentId);
+        }
+        return;
+      }
+
+      // Normal shell — scroll through xterm's buffer
       xterm.scrollLines(lines);
     }, { passive: false, capture: true });
 
