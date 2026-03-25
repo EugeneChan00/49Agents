@@ -1,7 +1,26 @@
 # 49Agents
 
-An infinite canvas with real terminal panes powered by tmux. Access your terminals from any browser.
-<img width="2559" height="1013" alt="Screenshot 2026-02-17 010827" src="https://github.com/user-attachments/assets/33238bd9-589c-438b-85a9-1c3ee780eca3" />
+Your terminals on an infinite canvas. Pan, zoom, and arrange real terminal panes in a browser — powered by tmux.
+
+**[49agents.com](https://49agents.com)**
+
+<img width="2559" height="1013" alt="49Agents — infinite canvas terminal workspace" src="https://github.com/user-attachments/assets/33238bd9-589c-438b-85a9-1c3ee780eca3" />
+
+## Why 49Agents?
+
+- **Infinite canvas** — arrange terminals, files, notes, and web pages in a spatial workspace. Pan and zoom with trackpad or mouse. No tabs, no splits — just place things where they make sense.
+- **Real terminals** — not a web shell emulator. Every pane runs in tmux via ttyd, with full ANSI support, scrollback, and your shell config.
+- **Multi-machine** — connect agents from multiple machines to one dashboard. SSH into your homelab from a phone, or monitor a fleet of servers from a single browser tab.
+- **File editor** — open files in Monaco (the VS Code editor engine) directly alongside your terminals.
+- **Notes** — Markdown notes with live preview, pinned to the canvas for reference.
+- **Git graph** — visual commit history with branch lanes, rendered as SVG.
+- **Beads** — lightweight issue tracking built in. Create, tag, and filter issues without leaving the workspace.
+- **Folder browser** — tree view with git status indicators, inline rename, and click-to-open.
+- **Web embeds** — pin any URL as an iframe pane (docs, dashboards, PRs).
+- **Claude Code awareness** — detects running Claude sessions, shows working/idle/permission state, and notifies you with sounds when Claude needs your attention.
+- **Keyboard-first** — Tab chords for pane switching, WASD move mode, shortcut numbers (1-9), broadcast input to multiple terminals.
+- **Access from anywhere** — open the workspace from a laptop, tablet, or phone. Works over Tailscale, LAN, or the hosted version (coming soon).
+- **Self-hosted** — run the whole stack on your own hardware. No data leaves your network.
 
 ## How It Works
 
@@ -150,11 +169,12 @@ The cloud server is configured via environment variables:
 | `GOOGLE_CLIENT_SECRET` | _(none)_ | Google OAuth secret |
 | `DATABASE_PATH` | `./data/tc.db` | SQLite database path |
 
-The agent reads one env var:
+The agent reads these env vars:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `TC_CLOUD_URL` | `ws://localhost:1071` | WebSocket URL of the cloud relay |
+| `TC_CONFIG_DIR` | `~/.49agents` | Agent config and state directory |
 
 ## Project Structure
 
@@ -166,9 +186,15 @@ agent/                  # Agent daemon (runs on your machine)
 
 cloud/                  # Cloud server (relay + web app)
 ├── src/                # Server: WebSocket relay, auth, API routes, DB
-├── src-client/         # Frontend source (vanilla JS)
+├── src-client/         # Frontend source (vanilla JS, modular)
+│   ├── app.js          # Main application
+│   └── modules/        # Extracted modules (sounds, utils, constants,
+│                       #   minimap, notifications, git-graph, pane renderers)
 ├── public/             # Static assets (HTML, CSS, xterm.js)
-└── build.js            # Frontend build script
+└── build.js            # Frontend build (esbuild + terser + obfuscator)
+
+49ctl                   # Process manager CLI
+start.sh                # Legacy setup script
 ```
 
 ## System Requirements
@@ -178,9 +204,9 @@ cloud/                  # Cloud server (relay + web app)
 - **ttyd** — terminal over WebSocket ([install](https://github.com/tsl0922/ttyd#installation))
 - **git** _(optional)_ — for git graph features
 
-## Hosted Version (Coming Soon)
+## Hosted Version
 
-We're building a hosted version at [49agents.com](https://49agents.com) — just install the agent, pair it, and access your terminals from anywhere without running your own server. Stay tuned.
+We're building a hosted version at **[49agents.com](https://49agents.com)** — install the agent, pair it, and access your terminals from anywhere without running your own server. Join the waitlist on the site.
 
 ## License
 
