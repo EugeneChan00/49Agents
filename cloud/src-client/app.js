@@ -4,6 +4,9 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
 import { playDismissSound, playNotificationSound, setSoundEnabled as _setSoundEnabled } from './modules/sounds.js';
 import { escapeHtml, formatBytes, metricColorClass, formatLocationPath, isExternalInputFocused, truncateUrl, isAgentVersionOutdated, getTerminalFontFamily } from './modules/utils.js';
 import { PANE_DEFAULTS, PANE_ENDPOINT_MAP, ICON_BEADS, ICON_GIT_GRAPH, ICON_FOLDER, CLAUDE_STATE_SVGS, CLAUDE_LOGO_SVG, RESET_ICON_SVG, WIFI_OFF_SVG, DEVICE_COLORS, TERMINAL_FONTS, CANVAS_BACKGROUNDS, osIcon } from './modules/constants.js';
+import { initMinimap, startMinimapLoop, hideMinimap, renderMinimap, getCanvasBounds, calcPlacementPos, setMinimapEnabled, getMinimapEnabled } from './modules/minimap.js';
+import { initNotificationDeps, initNotifications, showToast, dismissToast, snoozeNotification, sendBrowserNotification, updateTabTitleBadge, handleStateTransition, previousClaudeStates, notifiedStates, activeToasts, snoozedNotifications, snoozeCount, getIsFirstClaudeStateUpdate, setIsFirstClaudeStateUpdate, getNotificationContainer } from './modules/notifications.js';
+import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modules/git-graph.js';
 
 // 49Agents - Mobile-first terminal pane management
 (function() {
@@ -41,21 +44,14 @@ import { PANE_DEFAULTS, PANE_ENDPOINT_MAP, ICON_BEADS, ICON_GIT_GRAPH, ICON_FOLD
   // Folder panes map (paneId -> { refreshInterval })
   const folderPanes = new Map();
 
-  // === Notification System State ===
-  const previousClaudeStates = new Map(); // terminalId -> previous state string
-  const notifiedStates = new Map(); // terminalId -> state that was already notified
-  let isFirstClaudeStateUpdate = true; // Skip notifications on first update
-  let notificationContainer = null;
-  const activeToasts = new Map(); // terminalId -> toast element
-  const snoozedNotifications = new Map(); // terminalId -> { snoozeUntil, state, info }
-  const snoozeCount = new Map(); // `${terminalId}:${state}` -> count (escalation tracking)
-  // Sound state moved to modules/sounds.js (playDismissSound, playNotificationSound)
+  // Notification state — imported from modules/notifications.js
+  // (previousClaudeStates, notifiedStates, activeToasts, snoozedNotifications, snoozeCount)
+  // Sound state — imported from modules/sounds.js
   let snoozeDurationMs = 90 * 1000;
   let notificationSoundEnabled = true;
   let autoRemoveDoneNotifs = false;
   let focusMode = 'hover'; // 'hover' (default) or 'click' — how mouse selects panes
   let tutorialsCompleted = {};
-  const originalTitle = '49Agents';
 
   // Expanded pane state
   let expandedPaneId = null;
@@ -197,241 +193,7 @@ import { PANE_DEFAULTS, PANE_ENDPOINT_MAP, ICON_BEADS, ICON_GIT_GRAPH, ICON_FOLD
     shortcutPopup = null;
   }
 
-  // ── Minimap ──────────────────────────────────────────────────────────
-  let minimapEnabled = true;   // Tab+M toggle
-  let minimapVisible = false;
-  let minimapRafId = null;
-
-  function createMinimap() {
-    const wrap = document.createElement('div');
-    wrap.id = 'minimap';
-    wrap.style.display = 'none';
-    wrap.innerHTML = `<canvas id="minimap-canvas" width="400" height="300"></canvas>`;
-    document.body.appendChild(wrap);
-
-    const cvs = document.getElementById('minimap-canvas');
-    const ctx = cvs.getContext('2d');
-
-    // Click to navigate
-    wrap.addEventListener('mousedown', (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      const rect = cvs.getBoundingClientRect();
-      navigateFromMinimap(e, rect, cvs);
-
-      const onMove = (me) => navigateFromMinimap(me, rect, cvs);
-      const onUp = () => {
-        window.removeEventListener('mousemove', onMove);
-        window.removeEventListener('mouseup', onUp);
-      };
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
-    });
-
-    return { wrap, cvs, ctx };
-  }
-
-  function navigateFromMinimap(e, rect, cvs) {
-    if (state.panes.length === 0) return;
-    const bounds = getCanvasBounds();
-    if (!bounds) return;
-    const padding = 40;
-    const bw = bounds.maxX - bounds.minX + padding * 2;
-    const bh = bounds.maxY - bounds.minY + padding * 2;
-    const scale = Math.min(cvs.width / bw, cvs.height / bh);
-    const offsetX = (cvs.width - bw * scale) / 2;
-    const offsetY = (cvs.height - bh * scale) / 2;
-
-    const mx = (e.clientX - rect.left) * (cvs.width / rect.width);
-    const my = (e.clientY - rect.top) * (cvs.height / rect.height);
-
-    // Convert minimap coords to canvas coords
-    const canvasX = (mx - offsetX) / scale + bounds.minX - padding;
-    const canvasY = (my - offsetY) / scale + bounds.minY - padding;
-
-    state.panX = window.innerWidth / 2 - canvasX * state.zoom;
-    state.panY = window.innerHeight / 2 - canvasY * state.zoom;
-    updateCanvasTransform();
-    saveViewState();
-  }
-
-  function getCanvasBounds() {
-    if (state.panes.length === 0) return null;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const p of state.panes) {
-      if (p.x < minX) minX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.x + p.width > maxX) maxX = p.x + p.width;
-      if (p.y + p.height > maxY) maxY = p.y + p.height;
-    }
-    return { minX, minY, maxX, maxY };
-  }
-
-  let minimapEls = null;
-
-  function renderMinimap() {
-    if (!minimapEls) minimapEls = createMinimap();
-    const { wrap, cvs, ctx } = minimapEls;
-
-    if (state.panes.length === 0) {
-      wrap.style.display = 'none';
-      if (minimapVisible) { minimapVisible = false; document.body.classList.add('minimap-hidden'); }
-      return;
-    }
-
-    const shouldShow = minimapEnabled;
-    if (!shouldShow) {
-      if (minimapVisible) {
-        wrap.style.display = 'none';
-        minimapVisible = false;
-        document.body.classList.add('minimap-hidden');
-      }
-      return;
-    }
-
-    if (!minimapVisible) {
-      wrap.style.display = 'block';
-      minimapVisible = true;
-      document.body.classList.remove('minimap-hidden');
-    }
-
-    const bounds = getCanvasBounds();
-    if (!bounds) return;
-
-    const padding = 40;
-    const bw = bounds.maxX - bounds.minX + padding * 2;
-    const bh = bounds.maxY - bounds.minY + padding * 2;
-    const scale = Math.min(cvs.width / bw, cvs.height / bh);
-    const offsetX = (cvs.width - bw * scale) / 2;
-    const offsetY = (cvs.height - bh * scale) / 2;
-
-    const toMiniX = (x) => offsetX + (x - bounds.minX + padding) * scale;
-    const toMiniY = (y) => offsetY + (y - bounds.minY + padding) * scale;
-
-    // Clear
-    ctx.clearRect(0, 0, cvs.width, cvs.height);
-
-    // Background
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-    ctx.beginPath();
-    ctx.roundRect(0, 0, cvs.width, cvs.height, 8);
-    ctx.fill();
-
-    // Pane type colors
-    const typeColors = {
-      terminal: 'rgba(78, 201, 176, 0.6)',
-      file: 'rgba(100, 149, 237, 0.6)',
-      note: 'rgba(255, 213, 79, 0.6)',
-      'git-graph': 'rgba(255, 138, 101, 0.6)',
-      iframe: 'rgba(171, 130, 255, 0.6)',
-      beads: 'rgba(233, 170, 255, 0.6)',
-      folder: 'rgba(139, 195, 74, 0.6)',
-    };
-    const typeColorsActive = {
-      terminal: 'rgba(78, 201, 176, 0.9)',
-      file: 'rgba(100, 149, 237, 0.9)',
-      note: 'rgba(255, 213, 79, 0.9)',
-      'git-graph': 'rgba(255, 138, 101, 0.9)',
-      iframe: 'rgba(171, 130, 255, 0.9)',
-      beads: 'rgba(233, 170, 255, 0.9)',
-      folder: 'rgba(139, 195, 74, 0.9)',
-    };
-
-    // Draw panes
-    const focusedEl = document.querySelector('.pane.focused');
-    const focusedId = focusedEl ? focusedEl.dataset.paneId : null;
-
-    for (const p of state.panes) {
-      const rx = toMiniX(p.x);
-      const ry = toMiniY(p.y);
-      const rw = p.width * scale;
-      const rh = p.height * scale;
-
-      const isFocused = p.id === focusedId;
-      const isMoveTarget = moveModeActive && p.id === moveModePaneId;
-
-      // Pane fill
-      ctx.fillStyle = (isFocused || isMoveTarget)
-        ? (typeColorsActive[p.type] || 'rgba(255,255,255,0.9)')
-        : (typeColors[p.type] || 'rgba(255,255,255,0.4)');
-      ctx.beginPath();
-      ctx.roundRect(rx, ry, Math.max(rw, 2), Math.max(rh, 2), 2);
-      ctx.fill();
-
-      // Border for active pane
-      if (isFocused || isMoveTarget) {
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-      }
-
-      // Shortcut number
-      if (p.shortcutNumber && rw > 10 && rh > 10) {
-        ctx.fillStyle = 'rgba(255,255,255,0.9)';
-        ctx.font = `bold ${Math.min(Math.max(rh * 0.5, 8), 14)}px monospace`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(String(p.shortcutNumber), rx + rw / 2, ry + rh / 2);
-      }
-    }
-
-    // Viewport indicator
-    const vpLeft = (0 - state.panX) / state.zoom;
-    const vpTop = (0 - state.panY) / state.zoom;
-    const vpWidth = window.innerWidth / state.zoom;
-    const vpHeight = window.innerHeight / state.zoom;
-
-    const vrx = toMiniX(vpLeft);
-    const vry = toMiniY(vpTop);
-    const vrw = vpWidth * scale;
-    const vrh = vpHeight * scale;
-
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 3]);
-    ctx.strokeRect(vrx, vry, vrw, vrh);
-    ctx.setLineDash([]);
-
-  }
-
-  let minimapTimerId = null;
-
-  function hideMinimap() {
-    if (minimapTimerId) { clearTimeout(minimapTimerId); minimapTimerId = null; }
-    if (minimapRafId) { cancelAnimationFrame(minimapRafId); minimapRafId = null; }
-    if (minimapEls) {
-      minimapEls.wrap.style.display = 'none';
-      minimapVisible = false;
-    }
-    document.body.classList.add('minimap-hidden');
-  }
-
-  // Single loop: renders at 60fps when visible, polls at 5fps when hidden
-  function startMinimapLoop() {
-    if (minimapRafId || minimapTimerId) return; // already running
-    function tick() {
-      renderMinimap();
-      if (minimapVisible) {
-        minimapRafId = requestAnimationFrame(tick);
-      } else {
-        minimapTimerId = setTimeout(() => {
-          minimapRafId = requestAnimationFrame(tick);
-        }, 200);
-      }
-    }
-    minimapRafId = requestAnimationFrame(tick);
-  }
-
-  // Calculate pane placement position from click or center of viewport
-  function calcPlacementPos(placementPos, halfW, halfH) {
-    if (placementPos) {
-      return { x: placementPos.x - halfW, y: placementPos.y - halfH };
-    }
-    const viewCenterX = (window.innerWidth / 2 - state.panX) / state.zoom;
-    const viewCenterY = (window.innerHeight / 2 - state.panY) / state.zoom;
-    return { x: viewCenterX - halfW, y: viewCenterY - halfH };
-  }
-
+  // Minimap — imported from modules/minimap.js
   // PANE_ENDPOINT_MAP, ICON_*, CLAUDE_STATE_SVGS — imported from modules/constants.js
 
 
@@ -1850,8 +1612,8 @@ import { PANE_DEFAULTS, PANE_ENDPOINT_MAP, ICON_BEADS, ICON_GIT_GRAPH, ICON_FOLD
       }, 1000);
     }
 
-    if (notificationContainer) {
-      notificationContainer.prepend(toast);
+    if (getNotificationContainer()) {
+      getNotificationContainer().prepend(toast);
       activeToasts.set(GUEST_TOAST_ID, toast);
       requestAnimationFrame(() => toast.classList.add('visible'));
     }
@@ -1972,6 +1734,26 @@ import { PANE_DEFAULTS, PANE_ENDPOINT_MAP, ICON_BEADS, ICON_GIT_GRAPH, ICON_FOLD
 
     // xterm.js is loaded via ESM import at top of file
 
+    // Wire up module dependencies (modules can't access IIFE scope directly)
+    initMinimap({
+      getState: () => state,
+      updateCanvasTransform: () => updateCanvasTransform(),
+      saveViewState: () => saveViewState(),
+      getMoveModeActive: () => moveModeActive,
+      getMoveModePaneId: () => moveModePaneId,
+    });
+    initNotificationDeps({
+      getState: () => state,
+      panToPane: (id) => panToPane(id),
+      getSnoozeDurationMs: () => snoozeDurationMs,
+      getAutoRemoveDoneNotifs: () => autoRemoveDoneNotifs,
+    });
+    initGitGraphDeps({
+      getNextShortcutNumber, deviceLabelHtml, paneNameHtml, shortcutBadgeHtml,
+      setupPaneListeners, agentRequest, gitGraphPanes,
+      getCanvas: () => canvas,
+    });
+
     canvas = document.getElementById('canvas');
     canvasContainer = document.getElementById('canvas-container');
 
@@ -2033,301 +1815,11 @@ import { PANE_DEFAULTS, PANE_ENDPOINT_MAP, ICON_BEADS, ICON_GIT_GRAPH, ICON_FOLD
 
   // formatLocationPath — imported from modules/utils.js
 
-  // === Notification System Functions ===
+  // Notification functions — imported from modules/notifications.js
 
-  // Initialize notification container (called once from init)
-  function initNotifications() {
-    notificationContainer = document.createElement('div');
-    notificationContainer.id = 'notification-container';
-    document.body.appendChild(notificationContainer);
-
-    // Check snoozed notifications every 10 seconds (was 30s — more responsive)
-    setInterval(checkSnoozedNotifications, 10000);
-
-    // Check active notifications validity every 5 seconds
-    setInterval(checkActiveNotifications, 5000);
-
-  }
-
-  // Create and show a toast notification
-  function showToast(terminalId, title, deviceName, locationName, icon, priority, claudeState, info = null) {
-    // Remove existing toast for this terminal
-    dismissToast(terminalId);
-    // Remove from snoozed if re-showing
-    snoozedNotifications.delete(terminalId);
-
-    const toast = document.createElement('div');
-    toast.className = `notification-toast state-${claudeState || 'idle'}`;
-    toast.dataset.terminalId = terminalId;
-    toast.dataset.claudeState = claudeState || 'idle';
-
-    // High priority (permission/question) gets snooze button, done/idle gets dismiss button
-    const isHighPriority = priority === 'high';
-    const actionButton = isHighPriority
-      ? `<button class="notification-snooze" data-tooltip="Snooze for 3 minutes">🕐</button>`
-      : `<button class="notification-dismiss" data-tooltip="Dismiss">&times;</button>`;
-
-    toast.innerHTML = `
-      <div class="notification-icon">${icon}</div>
-      <div class="notification-body">
-        <div class="notification-title">${escapeHtml(title)}</div>
-        ${deviceName ? `<div class="notification-device">${escapeHtml(deviceName)}</div>` : ''}
-        ${locationName ? `<div class="notification-path">${escapeHtml(locationName)}</div>` : ''}
-      </div>
-      ${actionButton}
-    `;
-
-    // Store info for potential snooze/re-show
-    toast._notificationInfo = { title, deviceName, locationName, icon, priority, claudeState, info };
-
-    // First-hover tooltip: "Right-click to snooze/dismiss" (shown once)
-    if (!localStorage.getItem('hasSeenToastTooltip')) {
-      const onFirstHover = () => {
-        toast.removeEventListener('mouseenter', onFirstHover);
-        const tip = document.createElement('div');
-        tip.className = 'toast-tooltip';
-        tip.textContent = isHighPriority ? 'Right-click to snooze' : 'Right-click to dismiss';
-        toast.appendChild(tip);
-        requestAnimationFrame(() => tip.classList.add('visible'));
-        setTimeout(() => { tip.classList.remove('visible'); setTimeout(() => tip.remove(), 200); }, 3000);
-        localStorage.setItem('hasSeenToastTooltip', '1');
-      };
-      toast.addEventListener('mouseenter', onFirstHover);
-    }
-
-    // Right-click → auto-snooze or auto-discard (done notifications)
-    toast.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const isDone = toast._notificationInfo.claudeState === 'idle';
-      if (isDone) {
-        dismissToast(terminalId);
-      } else {
-        snoozeNotification(terminalId, toast._notificationInfo);
-      }
-    });
-
-    // Click anywhere on the toast → pan to pane
-    toast.addEventListener('click', (e) => {
-      if (e.target.closest('.notification-dismiss') || e.target.closest('.notification-snooze')) return;
-      panToPane(terminalId);
-    });
-
-    // Snooze button → hide for 3 minutes
-    const snoozeBtn = toast.querySelector('.notification-snooze');
-    if (snoozeBtn) {
-      snoozeBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        snoozeNotification(terminalId, toast._notificationInfo);
-      });
-    }
-
-    // Dismiss button → remove permanently
-    const dismissBtn = toast.querySelector('.notification-dismiss');
-    if (dismissBtn) {
-      dismissBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        dismissToast(terminalId);
-      });
-    }
-
-    notificationContainer.prepend(toast);
-    activeToasts.set(terminalId, toast);
-
-    // Trigger slide-in animation
-    requestAnimationFrame(() => toast.classList.add('visible'));
-
-    // Auto-dismiss medium priority after 15s (only if auto-remove is enabled)
-    if (priority === 'medium' && autoRemoveDoneNotifs) {
-      toast._autoDismissTimer = setTimeout(() => dismissToast(terminalId), 15000);
-    }
-
-    // Cap visible toasts at 8
-    const allToasts = notificationContainer.querySelectorAll('.notification-toast');
-    if (allToasts.length > 8) {
-      for (let i = 8; i < allToasts.length; i++) {
-        const old = allToasts[i];
-        if (old.dataset.terminalId) activeToasts.delete(old.dataset.terminalId);
-        old.remove();
-      }
-    }
-  }
-
-  // Snooze a notification — tracks escalation count
-  function snoozeNotification(terminalId, notificationInfo) {
-    const toast = activeToasts.get(terminalId);
-    if (toast) {
-      toast.classList.add('dismissing');
-      activeToasts.delete(terminalId);
-      setTimeout(() => toast.remove(), 200);
-    }
-
-    // Increment snooze count for escalation
-    const key = `${terminalId}:${notificationInfo.claudeState}`;
-    snoozeCount.set(key, (snoozeCount.get(key) || 0) + 1);
-
-    // Store snooze info
-    snoozedNotifications.set(terminalId, {
-      snoozeUntil: Date.now() + snoozeDurationMs,
-      ...notificationInfo
-    });
-  }
-
-  // Check snoozed notifications and re-show if still applicable (with escalation)
-  function checkSnoozedNotifications() {
-    const now = Date.now();
-    for (const [terminalId, snoozed] of snoozedNotifications) {
-      if (now >= snoozed.snoozeUntil) {
-        snoozedNotifications.delete(terminalId);
-
-        // Check if the state still requires notification
-        const currentState = previousClaudeStates.get(terminalId);
-        const stateStillNeedsAttention =
-          currentState === undefined ||
-          currentState === snoozed.claudeState;
-
-        if (stateStillNeedsAttention) {
-          const key = `${terminalId}:${snoozed.claudeState}`;
-          const count = snoozeCount.get(key) || 0;
-
-          // Re-show with escalation CSS class
-          showToast(
-            terminalId,
-            snoozed.title,
-            snoozed.deviceName,
-            snoozed.locationName,
-            snoozed.icon,
-            snoozed.priority,
-            snoozed.claudeState,
-            snoozed.info
-          );
-
-          // Apply escalation styling
-          const toast = activeToasts.get(terminalId);
-          if (toast && count >= 5) {
-            toast.classList.add('critical-escalated');
-          } else if (toast && count >= 3) {
-            toast.classList.add('escalated');
-          }
-
-          playNotificationSound(snoozed.claudeState, count);
-        }
-      }
-    }
-  }
-
-  // Check if active notifications are still valid (state might have changed)
-  // Valid states: see agent/src/protocol.js (CLAUDE_STATES, HIGH_PRIORITY_STATES) — canonical source
-  function checkActiveNotifications() {
-    for (const [terminalId, toast] of activeToasts) {
-      const notifState = toast.dataset.claudeState;
-      const currentState = previousClaudeStates.get(terminalId);
-
-      // High-priority states (canonical list: agent/src/protocol.js HIGH_PRIORITY_STATES)
-      if (notifState === 'permission' || notifState === 'question' || notifState === 'inputNeeded') {
-        if (currentState && currentState !== notifState) {
-          // State changed, dismiss the notification
-          dismissToast(terminalId);
-        }
-      }
-    }
-  }
-
-  // Dismiss a toast by terminal ID
-  function dismissToast(terminalId) {
-    const toast = activeToasts.get(terminalId);
-    if (toast) {
-      if (toast._autoDismissTimer) clearTimeout(toast._autoDismissTimer);
-      if (toast._guestCountdown) clearInterval(toast._guestCountdown);
-      // Play dismiss sound for permission/question only (not task complete)
-      const isHighPriority = toast.classList.contains('state-permission') ||
-                             toast.classList.contains('state-question') ||
-                             toast.classList.contains('state-inputNeeded');
-      if (isHighPriority) {
-        playDismissSound();
-      }
-      toast.classList.add('dismissing');
-      activeToasts.delete(terminalId);
-      setTimeout(() => toast.remove(), 200);
-    }
-  }
-
-  // playDismissSound, playNotificationSound — imported from modules/sounds.js
-
-  // Send browser notification (when tab not visible)
-  function sendBrowserNotification(terminalId, title, body) {
-    if (!document.hidden) return;
-    if (Notification.permission === 'default') {
-      Notification.requestPermission();
-      return;
-    }
-    if (Notification.permission !== 'granted') return;
-
-    const notification = new Notification(title, {
-      body: body,
-      tag: `claude-${terminalId}`,
-      icon: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="%23e87b35"><circle cx="8" cy="8" r="8"/></svg>')
-    });
-    notification.onclick = () => {
-      window.focus();
-      panToPane(terminalId);
-      notification.close();
-    };
-  }
-
-  // Update tab title badge with count of high-priority states
-  function updateTabTitleBadge(states) {
-    let highPriorityCount = 0;
-    for (const [, info] of Object.entries(states)) {
-      if (info.isClaude && (info.state === 'permission' || info.state === 'question' || info.state === 'inputNeeded')) {
-        highPriorityCount++;
-      }
-    }
-    document.title = highPriorityCount > 0 ? `(${highPriorityCount}) ${originalTitle}` : originalTitle;
-  }
-
-  // Fire notifications for a state transition
-  function handleStateTransition(terminalId, prevState, newState, info) {
-    const paneData = state.panes.find(p => p.id === terminalId);
-    const deviceName = paneData?.device || '';
-    const locationName = info.location?.name || '';
-
-    // Reset snooze escalation counter when state changes away
-    if (prevState && prevState !== newState) {
-      snoozeCount.delete(`${terminalId}:${prevState}`);
-    }
-
-    // Determine notification params
-    let title, icon, priority;
-    if (newState === 'permission') {
-      title = 'Needs permission';
-      icon = '🔑';
-      priority = 'high';
-    } else if (newState === 'question' || newState === 'inputNeeded') {
-      title = 'Needs input';
-      icon = '❔';
-      priority = 'high';
-    } else if (newState === 'idle' && prevState === 'working') {
-      title = 'Task complete';
-      icon = '✅';
-      priority = 'medium';
-    } else {
-      return; // No notification for other transitions
-    }
-
-    // Deduplication: don't re-notify same terminal+state (unless coming back from snooze)
-    if (notifiedStates.get(terminalId) === newState && !snoozedNotifications.has(terminalId)) return;
-    notifiedStates.set(terminalId, newState);
-
-    showToast(terminalId, title, deviceName, locationName, icon, priority, newState, info);
-    playNotificationSound(newState);
-    const detail = [deviceName, locationName].filter(Boolean).join(' · ');
-    sendBrowserNotification(terminalId, `Claude: ${title}`, detail);
-  }
-
-  // Update pane headers with Claude state info (called from WS push)
+    // Update pane headers with Claude state info (called from WS push)
   function updateClaudeStates(states) {
-    if (isFirstClaudeStateUpdate) {
+    if (getIsFirstClaudeStateUpdate()) {
       // On first load, show notifications for existing permission/question states
       // Sort: questions/inputNeeded first, permissions last (prepend = last added lands on top)
       const entries = Object.entries(states).filter(([, i]) => i.isClaude &&
@@ -2361,7 +1853,7 @@ import { PANE_DEFAULTS, PANE_ENDPOINT_MAP, ICON_BEADS, ICON_GIT_GRAPH, ICON_FOLD
         }
       }
     }
-    isFirstClaudeStateUpdate = false;
+    setIsFirstClaudeStateUpdate(false);
 
     // Track current states for next comparison
     for (const [terminalId, info] of Object.entries(states)) {
@@ -3409,8 +2901,8 @@ import { PANE_DEFAULTS, PANE_ENDPOINT_MAP, ICON_BEADS, ICON_GIT_GRAPH, ICON_FOLD
       setTimeout(() => toast.remove(), 300);
     });
 
-    if (notificationContainer) {
-      notificationContainer.prepend(toast);
+    if (getNotificationContainer()) {
+      getNotificationContainer().prepend(toast);
     }
   }
 
@@ -3467,8 +2959,8 @@ import { PANE_DEFAULTS, PANE_ENDPOINT_MAP, ICON_BEADS, ICON_GIT_GRAPH, ICON_FOLD
       setTimeout(() => toast.remove(), 300);
     });
 
-    if (notificationContainer) {
-      notificationContainer.prepend(toast);
+    if (getNotificationContainer()) {
+      getNotificationContainer().prepend(toast);
     }
 
     // Auto-dismiss after 8 seconds
@@ -5092,418 +4584,10 @@ import { PANE_DEFAULTS, PANE_ENDPOINT_MAP, ICON_BEADS, ICON_GIT_GRAPH, ICON_FOLD
     }
   }
 
-  function renderGitGraphPane(paneData) {
-    const existingPane = document.getElementById(`pane-${paneData.id}`);
-    if (existingPane) {
-      existingPane.remove();
-    }
+  // renderGitGraphPane, setupGitGraphListeners, assignLanes, gitRelativeTime,
+  // renderSvgGitGraph, fetchGitGraphData — imported from modules/git-graph.js
 
-    const pane = document.createElement('div');
-    pane.className = 'pane git-graph-pane';
-    pane.id = `pane-${paneData.id}`;
-    pane.style.left = `${paneData.x}px`;
-    pane.style.top = `${paneData.y}px`;
-    pane.style.width = `${paneData.width}px`;
-    pane.style.height = `${paneData.height}px`;
-    pane.style.zIndex = paneData.zIndex;
-    pane.dataset.paneId = paneData.id;
-
-    if (!paneData.shortcutNumber) paneData.shortcutNumber = getNextShortcutNumber();
-    const deviceTag = paneData.device ? deviceLabelHtml(paneData.device) : '';
-
-    pane.innerHTML = `
-      <div class="pane-header">
-        <span class="pane-title git-graph-title">
-          ${deviceTag}<svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align: middle; margin-right: 4px;">${ICON_GIT_GRAPH}</svg>
-          ${paneData.repoName || 'Git Graph'}
-        </span>
-        ${paneNameHtml(paneData)}
-        <div class="pane-header-right">
-          ${shortcutBadgeHtml(paneData)}
-          <div class="pane-zoom-controls">
-            <button class="pane-zoom-btn zoom-out" data-tooltip="Zoom out">−</button>
-            <button class="pane-zoom-btn zoom-in" data-tooltip="Zoom in">+</button>
-          </div>
-          <button class="pane-expand" aria-label="Expand pane" data-tooltip="Expand">⛶</button>
-          <button class="pane-close" aria-label="Close pane"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-        </div>
-      </div>
-      <div class="pane-content">
-        <div class="git-graph-container">
-          <div class="git-graph-header">
-            <span class="git-graph-branch"></span>
-            <span class="git-graph-status"></span>
-            <button class="git-graph-push-btn" data-tooltip="Push to remote"><svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style="vertical-align: middle; margin-right: 3px;"><path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/></svg>Push</button>
-          </div>
-          <div class="git-graph-output"><span class="git-graph-loading">Loading git graph...</span></div>
-        </div>
-      </div>
-      <div class="pane-resize-handle"></div>
-    `;
-
-    setupPaneListeners(pane, paneData);
-    setupGitGraphListeners(pane, paneData);
-    canvas.appendChild(pane);
-
-    // Initial data fetch
-    fetchGitGraphData(pane, paneData);
-  }
-
-  function setupGitGraphListeners(paneEl, paneData) {
-    const graphOutput = paneEl.querySelector('.git-graph-output');
-    const pushBtn = paneEl.querySelector('.git-graph-push-btn');
-
-    // Push to remote button
-    pushBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      pushBtn.disabled = true;
-      pushBtn.textContent = 'Pushing…';
-      pushBtn.classList.add('pushing');
-      try {
-        const data = await agentRequest('POST', `/api/git-graphs/${paneData.id}/push`, null, paneData.agentId);
-        pushBtn.textContent = 'Pushed!';
-        pushBtn.classList.add('push-success');
-        // Refresh the graph to show updated remote indicators
-        fetchGitGraphData(paneEl, paneData);
-      } catch (err) {
-        pushBtn.textContent = 'Failed';
-        pushBtn.classList.add('push-failed');
-        console.error('[App] Git push error:', err);
-      }
-      setTimeout(() => {
-        pushBtn.disabled = false;
-        pushBtn.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style="vertical-align: middle; margin-right: 3px;"><path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/></svg>Push';
-        pushBtn.classList.remove('pushing', 'push-success', 'push-failed');
-      }, 2000);
-    });
-
-    // Allow scrolling inside the graph output
-    graphOutput.addEventListener('mousedown', (e) => e.stopPropagation());
-    graphOutput.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
-    graphOutput.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
-
-    // Auto-refresh every 5 seconds
-    const refreshInterval = setInterval(() => {
-      fetchGitGraphData(paneEl, paneData);
-    }, 5000);
-
-    gitGraphPanes.set(paneData.id, { refreshInterval });
-  }
-
-  // ---------------------------------------------------------------------------
-  // SVG Git Graph Renderer
-  // ---------------------------------------------------------------------------
-  const GG = {
-    ROW_H: 28,        // height per commit row
-    LANE_W: 16,       // horizontal spacing between lanes
-    NODE_R: 4,        // commit dot radius
-    LEFT_PAD: 12,     // left padding before first lane
-    COLORS: [
-      '#85e89d', // green  (master/main)
-      '#79b8ff', // blue
-      '#b392f0', // purple
-      '#ffab70', // orange
-      '#f97583', // red
-      '#4ec9b0', // teal
-      '#d1bcf9', // light purple
-      '#ffd33d', // yellow
-    ],
-  };
-
-  /**
-   * Assign each commit a lane (column) and resolve branch colors.
-   * Returns { lanes: Map<hash, lane>, maxLane, branchColors: Map<lane, colorIdx> }
-   */
-  function assignLanes(commits) {
-    const hashIndex = new Map();
-    commits.forEach((c, i) => hashIndex.set(c.hash, i));
-
-    const lanes = new Map();       // hash -> lane number
-    const activeLanes = [];        // activeLanes[lane] = hash that "owns" this lane (or null if free)
-    let maxLane = 0;
-    const branchColors = new Map(); // lane -> color index
-    let nextColor = 1;             // 0 reserved for master/main
-
-    // Detect which commit is master/main HEAD
-    let masterHash = null;
-    for (const c of commits) {
-      if (c.refs && (/HEAD -> main\b/.test(c.refs) || /HEAD -> master\b/.test(c.refs))) {
-        masterHash = c.hash;
-        break;
-      }
-    }
-
-    for (const commit of commits) {
-      let lane = -1;
-
-      // Check if any active lane expects this commit (i.e. it was set as the target)
-      for (let i = 0; i < activeLanes.length; i++) {
-        if (activeLanes[i] === commit.hash) {
-          lane = i;
-          break;
-        }
-      }
-
-      // If no lane claimed this commit, find the first free lane
-      if (lane === -1) {
-        for (let i = 0; i < activeLanes.length; i++) {
-          if (activeLanes[i] === null) { lane = i; break; }
-        }
-        if (lane === -1) {
-          lane = activeLanes.length;
-          activeLanes.push(null);
-        }
-      }
-
-      lanes.set(commit.hash, lane);
-      if (lane > maxLane) maxLane = lane;
-
-      // Assign color for this lane if not yet assigned
-      if (!branchColors.has(lane)) {
-        if (commit.hash === masterHash) {
-          branchColors.set(lane, 0);
-        } else {
-          branchColors.set(lane, nextColor);
-          nextColor = (nextColor + 1) % GG.COLORS.length;
-          if (nextColor === 0) nextColor = 1; // skip master color
-        }
-      }
-
-      // Free this lane since we've consumed the commit
-      activeLanes[lane] = null;
-
-      // Assign parents to lanes
-      if (commit.parents.length > 0) {
-        const firstParent = commit.parents[0];
-        // First parent continues in the same lane
-        if (hashIndex.has(firstParent) && !lanes.has(firstParent)) {
-          // Check if another lane already claims this parent
-          const existingLane = activeLanes.indexOf(firstParent);
-          if (existingLane === -1) {
-            activeLanes[lane] = firstParent;
-          }
-        }
-
-        // Additional parents (merges) get new or existing lanes
-        for (let p = 1; p < commit.parents.length; p++) {
-          const parentHash = commit.parents[p];
-          if (!hashIndex.has(parentHash)) continue;
-          if (lanes.has(parentHash)) continue;
-
-          // Check if an active lane already targets this parent
-          const existing = activeLanes.indexOf(parentHash);
-          if (existing !== -1) continue;
-
-          // Find a free lane for this merge parent
-          let mergeLane = -1;
-          for (let i = 0; i < activeLanes.length; i++) {
-            if (activeLanes[i] === null) { mergeLane = i; break; }
-          }
-          if (mergeLane === -1) {
-            mergeLane = activeLanes.length;
-            activeLanes.push(null);
-          }
-          activeLanes[mergeLane] = parentHash;
-          if (mergeLane > maxLane) maxLane = mergeLane;
-          if (!branchColors.has(mergeLane)) {
-            branchColors.set(mergeLane, nextColor);
-            nextColor = (nextColor + 1) % GG.COLORS.length;
-            if (nextColor === 0) nextColor = 1;
-          }
-        }
-      }
-    }
-
-    return { lanes, maxLane, branchColors };
-  }
-
-  /**
-   * Format relative time from unix timestamp
-   */
-  function gitRelativeTime(ts) {
-    const diff = Math.floor(Date.now() / 1000) - ts;
-    if (diff < 60) return '1m';
-    const mins = Math.floor(diff / 60);
-    if (mins < 60) return `${mins}m`;
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours}h`;
-    const days = Math.floor(hours / 24);
-    if (days < 30) return `${days}d`;
-    const months = Math.floor(days / 30);
-    if (months < 12) return `${months}mo`;
-    return `${Math.floor(months / 12)}y`;
-  }
-
-  /**
-   * Render commits into the outputEl as an SVG graph + HTML rows.
-   */
-  function renderSvgGitGraph(outputEl, commits, currentBranch) {
-    if (!commits || commits.length === 0) {
-      outputEl.innerHTML = '<span class="git-graph-loading">No commits found</span>';
-      return;
-    }
-
-    const { lanes, maxLane, branchColors } = assignLanes(commits);
-    const svgWidth = GG.LEFT_PAD + (maxLane + 1) * GG.LANE_W + 8;
-    const totalHeight = commits.length * GG.ROW_H;
-
-    // Build SVG paths for connections and nodes
-    const paths = [];  // { d, color } for connection lines
-    const nodes = [];  // { cx, cy, color, hash }
-    const hashIndex = new Map();
-    commits.forEach((c, i) => hashIndex.set(c.hash, i));
-
-    for (let i = 0; i < commits.length; i++) {
-      const commit = commits[i];
-      const lane = lanes.get(commit.hash);
-      const colorIdx = branchColors.get(lane) ?? 1;
-      const color = GG.COLORS[colorIdx];
-      const cx = GG.LEFT_PAD + lane * GG.LANE_W;
-      const cy = i * GG.ROW_H + GG.ROW_H / 2;
-
-      nodes.push({ cx, cy, color, hash: commit.hash });
-
-      // Draw connections to parents
-      for (const parentHash of commit.parents) {
-        const pi = hashIndex.get(parentHash);
-        if (pi === undefined) continue;
-        const parentLane = lanes.get(parentHash);
-        if (parentLane === undefined) continue;
-        const parentColorIdx = branchColors.get(parentLane) ?? 1;
-        const px = GG.LEFT_PAD + parentLane * GG.LANE_W;
-        const py = pi * GG.ROW_H + GG.ROW_H / 2;
-
-        let d;
-        if (lane === parentLane) {
-          // Straight vertical line
-          d = `M${cx} ${cy} L${px} ${py}`;
-        } else {
-          // Bezier curve for merge/branch connections
-          const midY = cy + GG.ROW_H * 0.8;
-          d = `M${cx} ${cy} C${cx} ${midY}, ${px} ${py - GG.ROW_H * 0.8}, ${px} ${py}`;
-        }
-        // Use the color of the branch being merged from
-        const lineColor = lane !== parentLane ? GG.COLORS[parentColorIdx] : color;
-        paths.push({ d, color: lineColor });
-      }
-    }
-
-    // Also draw vertical continuation lines for active lanes between commits
-    // This fills gaps where a lane is active but the commit isn't on that lane
-    for (let i = 0; i < commits.length - 1; i++) {
-      const commit = commits[i];
-      const nextCommit = commits[i + 1];
-      const y1 = i * GG.ROW_H + GG.ROW_H / 2;
-      const y2 = (i + 1) * GG.ROW_H + GG.ROW_H / 2;
-
-      // For each parent of the current commit, if the parent is further down than i+1,
-      // we may need continuation lines. But the parent connections already handle this
-      // via straight/bezier lines. The issue is when a lane passes *through* a row
-      // without a commit on it. We handle this by checking all active connections.
-    }
-
-    // Build SVG
-    const svgPaths = paths.map(p =>
-      `<path d="${p.d}" stroke="${p.color}" stroke-width="2" fill="none" stroke-opacity="0.7"/>`
-    ).join('');
-    const svgNodes = nodes.map(n =>
-      `<circle cx="${n.cx}" cy="${n.cy}" r="${GG.NODE_R}" fill="${n.color}" stroke="rgba(0,0,0,0.3)" stroke-width="1"/>`
-    ).join('');
-
-    // Build commit rows HTML
-    const rowsHtml = commits.map((commit, i) => {
-      const lane = lanes.get(commit.hash);
-      const colorIdx = branchColors.get(lane) ?? 1;
-      const color = GG.COLORS[colorIdx];
-      const timeStr = commit.timestamp ? gitRelativeTime(commit.timestamp) : '';
-
-      // Parse refs for display
-      let refsHtml = '';
-      if (commit.refs) {
-        const refParts = commit.refs.split(',').map(r => r.trim()).filter(Boolean);
-        for (const ref of refParts) {
-          if (ref.startsWith('HEAD -> ')) {
-            const brName = escapeHtml(ref.replace('HEAD -> ', ''));
-            refsHtml += `<span class="gg-ref gg-ref-head">${brName}</span>`;
-          } else if (ref.startsWith('tag: ')) {
-            const tagName = escapeHtml(ref.replace('tag: ', ''));
-            refsHtml += `<span class="gg-ref gg-ref-tag">${tagName}</span>`;
-          } else if (ref.startsWith('origin/')) {
-            const remoteName = escapeHtml(ref);
-            refsHtml += `<span class="gg-ref gg-ref-remote">${remoteName}</span>`;
-          } else {
-            refsHtml += `<span class="gg-ref gg-ref-branch">${escapeHtml(ref)}</span>`;
-          }
-        }
-      }
-
-      const subject = escapeHtml(commit.subject || '');
-      const author = escapeHtml(commit.author || '');
-
-      return `<div class="gg-row" data-hash="${commit.hash}" style="height:${GG.ROW_H}px">
-        <div class="gg-graph-spacer" style="width:${svgWidth}px"></div>
-        <div class="gg-info">
-          <span class="gg-hash" style="color:${color}">${commit.hash}</span>
-          <span class="gg-time">${timeStr}</span>
-          ${refsHtml}
-          <span class="gg-subject">${subject}</span>
-          <span class="gg-author">${author}</span>
-        </div>
-      </div>`;
-    }).join('');
-
-    outputEl.innerHTML = `
-      <div class="gg-scroll-container">
-        <svg class="gg-svg" width="${svgWidth}" height="${totalHeight}"
-             viewBox="0 0 ${svgWidth} ${totalHeight}" xmlns="http://www.w3.org/2000/svg">
-          ${svgPaths}
-          ${svgNodes}
-        </svg>
-        <div class="gg-rows">${rowsHtml}</div>
-      </div>`;
-  }
-
-  async function fetchGitGraphData(paneEl, paneData) {
-    try {
-      const outputEl = paneEl.querySelector('.git-graph-output');
-      const maxCommits = 200;
-      const data = await agentRequest('GET', `/api/git-graphs/${paneData.id}/data?maxCommits=${maxCommits}`, null, paneData.agentId);
-
-      const branchEl = paneEl.querySelector('.git-graph-branch');
-      const statusEl = paneEl.querySelector('.git-graph-status');
-
-      if (data.error) {
-        outputEl.innerHTML = `<span class="git-graph-error">Error: ${data.error}</span>`;
-        return;
-      }
-
-      branchEl.innerHTML = `<span class="git-graph-branch-name">${escapeHtml(data.branch)}</span>`;
-
-      if (data.clean) {
-        statusEl.innerHTML = '<span class="git-graph-clean">&#x25cf; clean</span>';
-      } else {
-        const u = data.uncommitted;
-        const details = [];
-        if (u.staged > 0) details.push(`<span class="git-detail-staged">\u2713${u.staged}</span>`);
-        if (u.unstaged > 0) details.push(`<span class="git-detail-modified">\u270E${u.unstaged}</span>`);
-        if (u.untracked > 0) details.push(`<span class="git-detail-new">+${u.untracked}</span>`);
-        const detailHtml = details.length ? `<span class="git-graph-detail">${details.join(' ')}</span>` : '';
-        statusEl.innerHTML = `<span class="git-graph-dirty">&#x25cf; ${u.total} uncommitted</span>${detailHtml}`;
-      }
-
-      // Render SVG graph (supports both new structured data and old graphHtml fallback)
-      if (data.commits) {
-        renderSvgGitGraph(outputEl, data.commits, data.branch);
-      } else if (data.graphHtml) {
-        // Fallback for old agent versions that still return graphHtml
-        outputEl.innerHTML = `<pre style="margin:0;padding:8px 10px;white-space:pre;font-family:inherit;font-size:inherit;color:inherit;">${data.graphHtml}</pre>`;
-      }
-    } catch (e) {
-      console.error('[App] Failed to fetch git graph data:', e);
-    }
-  }
-
-  // Delete a pane (terminal or file)
+    // Delete a pane (terminal or file)
   async function deletePane(paneId) {
 
     // Remove from broadcast selection if present
@@ -10692,8 +9776,8 @@ import { PANE_DEFAULTS, PANE_ENDPOINT_MAP, ICON_BEADS, ICON_GIT_GRAPH, ICON_FOLD
         tabChordUsed = true;
         e.preventDefault();
         e.stopPropagation();
-        minimapEnabled = !minimapEnabled;
-        if (!minimapEnabled) {
+        setMinimapEnabled(!getMinimapEnabled());
+        if (!getMinimapEnabled()) {
           hideMinimap();
         } else {
           startMinimapLoop();
