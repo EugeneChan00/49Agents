@@ -1,6 +1,8 @@
 import { Terminal } from './lib/xterm.mjs';
 import { FitAddon } from './lib/addon-fit.mjs';
 import { WebLinksAddon } from './lib/addon-web-links.mjs';
+import { playDismissSound, playNotificationSound, setSoundEnabled as _setSoundEnabled } from './modules/sounds.js';
+import { escapeHtml, formatBytes, metricColorClass, formatLocationPath, isExternalInputFocused, truncateUrl, isAgentVersionOutdated, getTerminalFontFamily } from './modules/utils.js';
 
 // 49Agents - Mobile-first terminal pane management
 (function() {
@@ -55,9 +57,7 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
   const activeToasts = new Map(); // terminalId -> toast element
   const snoozedNotifications = new Map(); // terminalId -> { snoozeUntil, state, info }
   const snoozeCount = new Map(); // `${terminalId}:${state}` -> count (escalation tracking)
-  const lastSoundTimeByState = new Map(); // claudeState -> timestamp (per-state throttle)
-  const SOUND_THROTTLE_MS = 500;
-  const SOUND_GLOBAL_MIN_MS = 500; // absolute minimum between any two sounds
+  // Sound state moved to modules/sounds.js (playDismissSound, playNotificationSound)
   let snoozeDurationMs = 90 * 1000;
   let notificationSoundEnabled = true;
   let autoRemoveDoneNotifs = false;
@@ -459,15 +459,7 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
 
 
 
-  // Check if an interactive element outside of panes currently has focus
-  // (e.g. HUD search inputs, modal inputs). Used to prevent focus-stealing.
-  function isExternalInputFocused() {
-    const el = document.activeElement;
-    if (!el || el === document.body) return false;
-    if (el.closest('.pane')) return el.classList.contains('beads-tag-input');
-    const tag = el.tagName;
-    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
-  }
+  // isExternalInputFocused — imported from modules/utils.js
 
   // File handles for native file picker (for saving back)
   const fileHandles = new Map(); // paneId -> FileSystemFileHandle
@@ -824,20 +816,7 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
     }
   }
 
-  function formatBytes(bytes) {
-    if (bytes == null) return '?';
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(0) + ' MB';
-    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-  }
-
-  function metricColorClass(pct) {
-    if (pct >= 100) return 'metric-red';
-    if (pct >= 65) return 'metric-yellow';
-    if (pct < 30) return 'metric-green';
-    return '';
-  }
+  // formatBytes, metricColorClass — imported from modules/utils.js
 
   function createHudContainer() {
     const container = document.createElement('div');
@@ -2008,6 +1987,7 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
       }
       if (prefs.notificationSound !== undefined) {
         notificationSoundEnabled = prefs.notificationSound;
+        _setSoundEnabled(prefs.notificationSound);
       }
       if (prefs.autoRemoveDone !== undefined) {
         autoRemoveDoneNotifs = prefs.autoRemoveDone;
@@ -2098,14 +2078,7 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
   // Claude logo SVG (from Bootstrap Icons)
   const CLAUDE_LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="claude-logo"><path d="m3.127 10.604 3.135-1.76.053-.153-.053-.085H6.11l-.525-.032-1.791-.048-1.554-.065-1.505-.08-.38-.081L0 7.832l.036-.234.32-.214.455.04 1.009.069 1.513.105 1.097.064 1.626.17h.259l.036-.105-.089-.065-.068-.064-1.566-1.062-1.695-1.121-.887-.646-.48-.327-.243-.306-.104-.67.435-.48.585.04.15.04.593.456 1.267.981 1.654 1.218.242.202.097-.068.012-.049-.109-.181-.9-1.626-.96-1.655-.428-.686-.113-.411a2 2 0 0 1-.068-.484l.496-.674L4.446 0l.662.089.279.242.411.94.666 1.48 1.033 2.014.302.597.162.553.06.17h.105v-.097l.085-1.134.157-1.392.154-1.792.052-.504.25-.605.497-.327.387.186.319.456-.045.294-.19 1.23-.37 1.93-.243 1.29h.142l.161-.16.654-.868 1.097-1.372.484-.545.565-.601.363-.287h.686l.505.751-.226.775-.707.895-.585.759-.839 1.13-.524.904.048.072.125-.012 1.897-.403 1.024-.186 1.223-.21.553.258.06.263-.218.536-1.307.323-1.533.307-2.284.54-.028.02.032.04 1.029.098.44.024h1.077l2.005.15.525.346.315.424-.053.323-.807.411-3.631-.863-.872-.218h-.12v.073l.726.71 1.331 1.202 1.667 1.55.084.383-.214.302-.226-.032-1.464-1.101-.565-.497-1.28-1.077h-.084v.113l.295.432 1.557 2.34.08.718-.112.234-.404.141-.444-.08-.911-1.28-.94-1.44-.759-1.291-.093.053-.448 4.821-.21.246-.484.186-.403-.307-.214-.496.214-.98.258-1.28.21-1.016.19-1.263.112-.42-.008-.028-.092.012-.953 1.307-1.448 1.957-1.146 1.227-.274.109-.477-.247.045-.44.266-.39 1.586-2.018.956-1.25.617-.723-.004-.105h-.036l-4.212 2.736-.75.096-.324-.302.04-.496.154-.162 1.267-.871z"/></svg>`;
 
-  // Format path with dots instead of slashes
-  function formatLocationPath(name) {
-    if (!name) return '';
-    return name.split('/').map((part, i, arr) => {
-      if (i === arr.length - 1) return part;
-      return part + '<span class="path-dot"> · </span>';
-    }).join('');
-  }
+  // formatLocationPath — imported from modules/utils.js
 
   // === Notification System Functions ===
 
@@ -2326,113 +2299,7 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
     }
   }
 
-  // Subtle dismiss sound (shared for permission/question)
-  function playDismissSound() {
-    if (!notificationSoundEnabled) return;
-    try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(660, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.12);
-      gain.gain.setValueAtTime(0.06, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
-      osc.connect(gain).connect(ctx.destination);
-      osc.start(ctx.currentTime);
-      osc.stop(ctx.currentTime + 0.15);
-      setTimeout(() => ctx.close(), 250);
-    } catch (e) {
-      // Audio not available
-    }
-  }
-
-  // Play notification sound via Web Audio API (distinct per state)
-  function playTwoNoteTone(ctx, freq1, freq2, gainMul = 1.0, skipClose = false) {
-    const osc1 = ctx.createOscillator();
-    const gain1 = ctx.createGain();
-    osc1.type = 'sine';
-    osc1.frequency.setValueAtTime(freq1, ctx.currentTime);
-    gain1.gain.setValueAtTime(0.15 * gainMul, ctx.currentTime);
-    gain1.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
-    osc1.connect(gain1).connect(ctx.destination);
-    osc1.start(ctx.currentTime);
-    osc1.stop(ctx.currentTime + 0.2);
-
-    const osc2 = ctx.createOscillator();
-    const gain2 = ctx.createGain();
-    osc2.type = 'sine';
-    osc2.frequency.setValueAtTime(freq2, ctx.currentTime + 0.15);
-    gain2.gain.setValueAtTime(0.001, ctx.currentTime);
-    gain2.gain.setValueAtTime(0.15 * gainMul, ctx.currentTime + 0.15);
-    gain2.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
-    osc2.connect(gain2).connect(ctx.destination);
-    osc2.start(ctx.currentTime + 0.15);
-    osc2.stop(ctx.currentTime + 0.4);
-    if (!skipClose) setTimeout(() => ctx.close(), 500);
-  }
-
-  function playThreeNoteTone(ctx, freq1, freq2, freq3, gainMul = 1.0) {
-    playTwoNoteTone(ctx, freq1, freq2, gainMul, true);
-    const osc3 = ctx.createOscillator();
-    const gain3 = ctx.createGain();
-    osc3.type = 'sine';
-    osc3.frequency.setValueAtTime(freq3, ctx.currentTime + 0.35);
-    gain3.gain.setValueAtTime(0.001, ctx.currentTime);
-    gain3.gain.setValueAtTime(0.15 * gainMul, ctx.currentTime + 0.35);
-    gain3.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.6);
-    osc3.connect(gain3).connect(ctx.destination);
-    osc3.start(ctx.currentTime + 0.35);
-    osc3.stop(ctx.currentTime + 0.6);
-    setTimeout(() => ctx.close(), 700);
-  }
-
-  function playNotificationSound(claudeState, escalationLevel = 0) {
-    if (!notificationSoundEnabled) return;
-    const now = Date.now();
-    // Per-state throttle: each state type has its own cooldown
-    const lastForState = lastSoundTimeByState.get(claudeState) || 0;
-    if (now - lastForState < SOUND_THROTTLE_MS) return;
-    // Global minimum to prevent overlapping garbled audio
-    let lastGlobal = 0;
-    for (const t of lastSoundTimeByState.values()) { if (t > lastGlobal) lastGlobal = t; }
-    if (now - lastGlobal < SOUND_GLOBAL_MIN_MS) return;
-    // Escalation: louder at level 5+
-    const gainMultiplier = escalationLevel >= 5 ? 1.5 : 1.0;
-
-    try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      if (claudeState === 'permission') {
-        if (escalationLevel >= 5) {
-          playThreeNoteTone(ctx, 587, 440, 330, gainMultiplier); // Descending D5→A4→E4
-        } else {
-          playTwoNoteTone(ctx, 587, 440, gainMultiplier); // Descending D5→A4
-        }
-      } else if (claudeState === 'question' || claudeState === 'inputNeeded') {
-        if (escalationLevel >= 5) {
-          playThreeNoteTone(ctx, 587, 784, 988, gainMultiplier); // Ascending D5→G5→B5
-        } else {
-          playTwoNoteTone(ctx, 587, 784, gainMultiplier); // Ascending D5→G5
-        }
-      } else {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(880, ctx.currentTime);
-        gain.gain.setValueAtTime(0.1 * gainMultiplier, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.25);
-        osc.connect(gain).connect(ctx.destination);
-        osc.start(ctx.currentTime);
-        osc.stop(ctx.currentTime + 0.25);
-        setTimeout(() => ctx.close(), 350);
-      }
-      // Only record timestamp AFTER audio successfully started
-      lastSoundTimeByState.set(claudeState, now);
-    } catch (e) {
-      // Audio not available — don't update timestamp so next attempt isn't throttled
-    }
-  }
-
+  // playDismissSound, playNotificationSound — imported from modules/sounds.js
 
   // Send browser notification (when tab not visible)
   function sendBrowserNotification(terminalId, title, body) {
@@ -3128,9 +2995,7 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
     };
   }
 
-  function getTerminalFontFamily(fontName) {
-    return `"${fontName}", "Fira Code", "SF Mono", Menlo, Monaco, monospace`;
-  }
+  // getTerminalFontFamily — imported from modules/utils.js
 
   function applyTerminalFont(fontName) {
     currentTerminalFont = fontName;
@@ -3382,6 +3247,7 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
     soundToggle.addEventListener('change', () => {
       const on = soundToggle.checked;
       notificationSoundEnabled = on;
+      _setSoundEnabled(on);
       const track = soundToggle.nextElementSibling;
       const knob = track.nextElementSibling;
       track.style.background = on ? 'rgba(var(--accent-rgb),0.5)' : 'rgba(255,255,255,0.1)';
@@ -3579,18 +3445,7 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
 
   // --- Agent Update Notification Helpers ---
 
-  function isAgentVersionOutdated(current, latest) {
-    if (!current || !latest) return false;
-    const c = current.split('.').map(Number);
-    const l = latest.split('.').map(Number);
-    for (let i = 0; i < Math.max(c.length, l.length); i++) {
-      const cv = c[i] || 0;
-      const lv = l[i] || 0;
-      if (cv < lv) return true;
-      if (cv > lv) return false;
-    }
-    return false;
-  }
+  // isAgentVersionOutdated — imported from modules/utils.js
 
   function showUpdateToast(agentId, hostname, currentVersion, latestVersion) {
     // Remove any existing update toast for this agent
@@ -6234,12 +6089,7 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
     header.style.borderBottom = `1px solid rgba(${color.rgb}, 0.2)`;
   }
 
-  // Escape HTML for safe insertion
-  function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-  }
+  // escapeHtml — imported from modules/utils.js
 
   // Expand a pane to full screen
   function expandPane(paneId) {
@@ -6600,15 +6450,7 @@ import { WebLinksAddon } from './lib/addon-web-links.mjs';
   }
 
   // Truncate URL for display in pane header
-  function truncateUrl(url) {
-    try {
-      const u = new URL(url);
-      const domain = u.hostname.replace(/^www\./, '');
-      return domain.length > 30 ? domain.substring(0, 27) + '...' : domain;
-    } catch {
-      return url.substring(0, 30);
-    }
-  }
+  // truncateUrl — imported from modules/utils.js
 
   // Render an iframe pane
   function renderIframePane(paneData) {
