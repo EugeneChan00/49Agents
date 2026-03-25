@@ -24,7 +24,7 @@ export function setupDownloadRoutes(app) {
   app.get('/dl/install.sh', (req, res) => {
     const proto = req.secure ? 'https' : 'http';
     const wsProto = req.secure ? 'wss' : 'ws';
-    const host = config.cloudHost;
+    const host = req.headers.host || config.cloudHost;
     const baseUrl = `${proto}://${host}`;
     const wsUrl = `${wsProto}://${host}`;
 
@@ -37,7 +37,7 @@ export function setupDownloadRoutes(app) {
   // GET /dl/install.ps1 — Dynamic PowerShell installer for Windows (WSL2)
   app.get('/dl/install.ps1', (req, res) => {
     const proto = req.secure ? 'https' : 'http';
-    const host = config.cloudHost;
+    const host = req.headers.host || config.cloudHost;
     const baseUrl = `${proto}://${host}`;
 
     const script = generatePowerShellInstaller(baseUrl);
