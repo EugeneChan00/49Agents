@@ -10291,5 +10291,28 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     updateCanvasTransform,
     renderHud,
     PANE_DEFAULTS,
+    // Pane renderers
+    renderGitGraphPane,
+    renderIframePane,
+    renderBeadsPane,
+    renderFolderPane,
+    renderFilePane,
+    renderNotePane,
+    // Pane creation helpers
+    setupPaneListeners,
+    getNextShortcutNumber,
+    // Settings
+    showSettingsModal,
+    // Canvas
+    setZoom,
+    get canvas() { return canvas; },
+    get expandedPaneId() { return expandedPaneId; },
+    expandPane,
+    collapsePane,
+    panToPane,
+    focusPane,
+    // Minimap
+    hideMinimap,
+    startMinimapLoop,
   };
 })();
