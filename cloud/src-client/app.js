@@ -51,6 +51,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
   let notificationSoundEnabled = true;
   let autoRemoveDoneNotifs = false;
   let focusMode = 'hover'; // 'hover' (default) or 'click' — how mouse selects panes
+  let tabHeld = false; // Track Tab key state globally (used for Tab+scroll canvas pan, Tab+key chords)
   let tutorialsCompleted = {};
 
   // Expanded pane state
@@ -6081,7 +6082,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     // Prevent drag/pan when interacting with scrollable table
     tableWrap.addEventListener('mousedown', (e) => e.stopPropagation());
     tableWrap.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
-    tableWrap.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
+    tableWrap.addEventListener('wheel', (e) => { if (!tabHeld) e.stopPropagation(); }, { passive: true });
 
     // Search input shouldn't trigger drag
     searchInput.addEventListener('mousedown', (e) => e.stopPropagation());
@@ -7018,6 +7019,9 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     container.addEventListener('wheel', (e) => {
       // Skip re-dispatched events from ourselves
       if (e[XTERM_WHEEL]) return;
+
+      // Tab+Scroll: let it bubble to canvas for panning
+      if (tabHeld) return;
 
       e.preventDefault();
       e.stopPropagation();
@@ -9145,13 +9149,22 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     canvasContainer.addEventListener('mousedown', handleCanvasPanStart);
     canvasContainer.addEventListener('touchstart', handleTouchStart, { passive: false });
     canvasContainer.addEventListener('wheel', handleWheel, { passive: false });
-    // Capture-phase: intercept Ctrl+Scroll before any pane handler can stopPropagation
+    // Capture-phase: intercept Ctrl+Scroll and Tab+Scroll before any pane handler can stopPropagation
     canvasContainer.addEventListener('wheel', (e) => {
       if (e.ctrlKey) {
         e.preventDefault();
         e.stopPropagation();
         const delta = e.deltaY > 0 ? 0.9 : 1.1;
         setZoom(state.zoom * delta, e.clientX, e.clientY);
+        return;
+      }
+      if (tabHeld) {
+        e.preventDefault();
+        e.stopPropagation();
+        state.panX -= e.deltaX || 0;
+        state.panY -= e.deltaY;
+        updateCanvasTransform();
+        saveViewState();
       }
     }, { passive: false, capture: true });
     canvasContainer.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -9575,7 +9588,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     // Double-tap Tab (outside terminal): enter move mode (WASD pane navigation).
     // Tab inside terminal: passes through to terminal as normal.
     // Uses capture phase so keys are intercepted before xterm processes them.
-    let tabHeld = false;
+    // tabHeld is declared at module scope (used by wheel handlers too)
     let tabChordUsed = false;
     let tabPressedInTerminal = false;
 
@@ -9598,15 +9611,17 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
         return;
       }
 
-      if (e.key === 'Tab' && !e.repeat) {
-        tabHeld = true;
-        tabChordUsed = false;
-        // Detect if a terminal pane currently has focus
-        const active = document.activeElement;
-        const paneEl = active && active.closest('.pane');
-        const paneId = paneEl && paneEl.id.replace('pane-', '');
-        const paneData = paneId && state.panes.find(p => p.id === paneId);
-        tabPressedInTerminal = !!(paneData && paneData.type === 'terminal');
+      if (e.key === 'Tab') {
+        if (!e.repeat) {
+          tabHeld = true;
+          tabChordUsed = false;
+          // Detect if a terminal pane currently has focus
+          const active = document.activeElement;
+          const paneEl = active && active.closest('.pane');
+          const paneId = paneEl && paneEl.id.replace('pane-', '');
+          const paneData = paneId && state.panes.find(p => p.id === paneId);
+          tabPressedInTerminal = !!(paneData && paneData.type === 'terminal');
+        }
         // Always prevent default Tab (browser tab-cycling and terminal tab insertion)
         if (!isExternalInputFocused()) {
           e.preventDefault();
@@ -10220,6 +10235,17 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
       e.preventDefault();
       const delta = e.deltaY > 0 ? 0.9 : 1.1;
       setZoom(state.zoom * delta, e.clientX, e.clientY);
+      return;
+    }
+
+    // Tab+Scroll anywhere = always pan canvas (even over panes)
+    if (tabHeld) {
+      e.preventDefault();
+      e.stopPropagation();
+      state.panX -= e.deltaX || 0;
+      state.panY -= e.deltaY;
+      updateCanvasTransform();
+      saveViewState();
       return;
     }
 
