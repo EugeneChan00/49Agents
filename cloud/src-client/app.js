@@ -10317,8 +10317,14 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
   }
 
   // Handle touch start for pan/pinch
+  // Momentum state for touch pan inertia
+  let momentumRaf = null;
+
   function handleTouchStart(e) {
     if (e.target !== canvas && e.target !== canvasContainer) return;
+
+    // Cancel any in-flight momentum animation
+    if (momentumRaf) { cancelAnimationFrame(momentumRaf); momentumRaf = null; }
 
     if (e.touches.length === 1) {
       e.preventDefault();
@@ -10335,12 +10341,19 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
       initialZoom = state.zoom;
     }
 
+    // Velocity tracking: store last 3 touch samples for momentum calculation
+    const samples = []; // { x, y, t }
+
     const moveHandler = (moveE) => {
       if (moveE.touches.length === 1 && isPanning) {
         moveE.preventDefault();
         state.panX = moveE.touches[0].clientX - panStartX;
         state.panY = moveE.touches[0].clientY - panStartY;
         updateCanvasTransform();
+
+        const now = Date.now();
+        samples.push({ x: state.panX, y: state.panY, t: now });
+        if (samples.length > 3) samples.shift();
       } else if (moveE.touches.length === 2) {
         moveE.preventDefault();
         const currentDistance = getPinchDistance(moveE.touches);
@@ -10357,9 +10370,38 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     const endHandler = () => {
       isPanning = false;
       hideIframeOverlays();
-      saveViewState();
       canvasContainer.removeEventListener('touchmove', moveHandler);
       canvasContainer.removeEventListener('touchend', endHandler);
+
+      // Compute velocity from recent samples and apply momentum
+      if (samples.length >= 2) {
+        const oldest = samples[0];
+        const newest = samples[samples.length - 1];
+        const dt = newest.t - oldest.t;
+        if (dt > 0 && dt < 200) { // Only if recent enough to be intentional
+          let vx = (newest.x - oldest.x) / dt * 16; // px per frame (~16ms)
+          let vy = (newest.y - oldest.y) / dt * 16;
+          const friction = 0.92;
+          const minV = 0.3;
+
+          const animate = () => {
+            vx *= friction;
+            vy *= friction;
+            if (Math.abs(vx) < minV && Math.abs(vy) < minV) {
+              momentumRaf = null;
+              saveViewState();
+              return;
+            }
+            state.panX += vx;
+            state.panY += vy;
+            updateCanvasTransform();
+            momentumRaf = requestAnimationFrame(animate);
+          };
+          momentumRaf = requestAnimationFrame(animate);
+          return; // saveViewState called when momentum ends
+        }
+      }
+      saveViewState();
     };
 
     canvasContainer.addEventListener('touchmove', moveHandler, { passive: false });
