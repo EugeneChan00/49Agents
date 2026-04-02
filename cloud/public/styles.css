@@ -3135,6 +3135,12 @@ body.minimap-hidden #controls {
     min-width: 140px;
     max-width: 260px;
     border-radius: 10px;
+    transform: scale(0.85);
+    transform-origin: top left;
+  }
+
+  #hud-overlay.collapsed {
+    transform: scale(0.8);
   }
 
   .hud-title {
@@ -3142,7 +3148,7 @@ body.minimap-hidden #controls {
   }
 
   .hud-device {
-    padding: 5px 6px;
+    padding: 4px 5px;
   }
 
   .hud-device-name {
@@ -3153,6 +3159,15 @@ body.minimap-hidden #controls {
     font-size: 9px;
   }
 
+  .hud-counts {
+    gap: 4px;
+  }
+
+  .hud-count {
+    font-size: 9px;
+    padding: 1px 4px;
+  }
+
   .hud-dot {
     width: 7px;
     height: 7px;
@@ -3161,6 +3176,35 @@ body.minimap-hidden #controls {
   #hud-restore-dot {
     top: 10px;
     left: 10px;
+  }
+
+  /* Hide HUD when pane is expanded on mobile */
+  body.pane-expanded #hud-container {
+    display: none !important;
+  }
+}
+
+/* Even smaller HUD on small phones */
+@media (max-width: 480px) {
+  #hud-container {
+    top: 6px;
+    left: 6px;
+  }
+
+  #hud-overlay {
+    transform: scale(0.75);
+    padding: 6px 8px;
+    min-width: 120px;
+    max-width: 200px;
+  }
+
+  .hud-device-name {
+    font-size: 9px;
+    max-width: 80px;
+  }
+
+  .hud-metric {
+    font-size: 8px;
   }
 }
 
@@ -5705,7 +5749,7 @@ body.cursor-suppressed .pane { pointer-events: none !important; }
     overflow-y: auto !important;
     -webkit-overflow-scrolling: touch !important;
     pointer-events: auto !important;
-    touch-action: pan-y !important;
+    touch-action: none !important;
   }
 
   .pane.expanded .terminal-container {
@@ -5715,61 +5759,8 @@ body.cursor-suppressed .pane { pointer-events: none !important; }
 
   /* When mobile keyboard is visible, adjust expanded pane */
   body.mobile-keyboard-visible .pane.expanded {
-    bottom: 50px !important;
+    transition: bottom 0.1s ease;
   }
 }
 
-/* ─── HUD mobile minimization ─── */
-@media (max-width: 768px) {
-  #hud-overlay {
-    transform: scale(0.85);
-    transform-origin: top left;
-  }
-
-  #hud-overlay.collapsed {
-    transform: scale(0.8);
-  }
-
-  .hud-device {
-    padding: 4px 5px;
-  }
-
-  .hud-counts {
-    gap: 4px;
-  }
-
-  .hud-count {
-    font-size: 9px;
-    padding: 1px 4px;
-  }
-
-  /* Make HUD even smaller on small phones */
-  @media (max-width: 480px) {
-    #hud-container {
-      top: 6px;
-      left: 6px;
-    }
-
-    #hud-overlay {
-      transform: scale(0.75);
-      padding: 6px 8px;
-      min-width: 120px;
-      max-width: 200px;
-    }
-
-    .hud-device-name {
-      font-size: 9px;
-      max-width: 80px;
-    }
-
-    .hud-metric {
-      font-size: 8px;
-    }
-  }
-
-  /* Hide HUD completely when pane is expanded on mobile */
-  body.pane-expanded #hud-container {
-    display: none !important;
-  }
-}
 

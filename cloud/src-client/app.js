@@ -7176,6 +7176,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     container.addEventListener('touchmove', (e) => {
       if (!_touchScrollActive) return;
       if (!expandedPaneId || expandedPaneId !== paneData.id) return;
+      if (e.touches.length !== 1) { _touchScrollActive = false; return; } // abort on multi-touch (pinch)
       const dy = _touchScrollY - e.touches[0].clientY;
       _touchScrollY = e.touches[0].clientY;
       const lines = Math.round(dy / 20) || (dy > 0 ? 1 : dy < 0 ? -1 : 0);
@@ -9443,7 +9444,9 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
   // ─── Mobile Keyboard Extension Bar ───
   // Provides Esc, Ctrl+C, Tab, arrow keys, etc. above the on-screen keyboard
   function setupMobileKeyboardBar() {
-    if (window.innerWidth > 768) return;
+    // Always create the bar — visibility is controlled dynamically
+    // based on screen width + expanded terminal state
+    if (document.getElementById('mobile-keyboard-bar')) return; // prevent duplicates
 
     const bar = document.createElement('div');
     bar.id = 'mobile-keyboard-bar';
@@ -9529,18 +9532,20 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
         bar.classList.add('visible');
       } else {
         bar.classList.remove('visible');
+        // Clean up keyboard-visible state when no longer needed
+        document.body.classList.remove('mobile-keyboard-visible');
+        bar.style.bottom = '0px';
       }
     }
 
-    // Observe expand/collapse
-    const origExpand = expandPane;
-    const origCollapse = collapsePane;
-
-    // We need to hook into expand/collapse — use MutationObserver on body class
+    // Hook into expand/collapse via body class changes
     const observer = new MutationObserver(() => {
       updateKeyboardBarVisibility();
     });
     observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
+    // Also update on orientation/resize change
+    window.addEventListener('resize', updateKeyboardBarVisibility);
 
     // Also handle visual viewport resize (keyboard show/hide)
     if (window.visualViewport) {
