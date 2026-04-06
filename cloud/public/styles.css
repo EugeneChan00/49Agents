@@ -2513,6 +2513,8 @@ body.minimap-hidden #controls {
   font-size: 13px;
   font-weight: 500;
   line-height: 1.3;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .notification-device {
