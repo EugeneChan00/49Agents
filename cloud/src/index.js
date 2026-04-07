@@ -19,6 +19,7 @@ import { setupAnalyticsRoutes } from './routes/analytics.js';
 import { setupWebSocketRelay } from './ws/relay.js';
 import { setupCloudCallbackRoutes } from './auth/cloudCallback.js';
 import { ensureLocalAuthTable, isLocalMode } from './auth/localAuth.js';
+import { initLocalTelemetryCollector } from './telemetry/localCollector.js';
 import { config } from './config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -215,6 +216,7 @@ app.get('*', (req, res) => {
 async function start() {
   initDatabase();
   ensureLocalAuthTable();
+  initLocalTelemetryCollector();
 
   // Read latest agent version from the tarball
   let latestAgentVersion = null;

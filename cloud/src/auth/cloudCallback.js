@@ -14,6 +14,7 @@ import { upsertUser } from '../db/users.js';
 import { saveLocalAuth, clearLocalAuth, getLocalAuth, setTelemetryConsent } from './localAuth.js';
 import { issueAccessToken, issueRefreshToken, setAuthCookies } from './github.js';
 import { recordEvent } from '../db/events.js';
+import { refreshTelemetryState } from '../telemetry/localCollector.js';
 
 export function setupCloudCallbackRoutes(app) {
   const cloudAuthUrl = config.cloudAuthUrl;
@@ -134,6 +135,7 @@ export function setupCloudCallbackRoutes(app) {
         return res.status(400).json({ error: 'Not authenticated' });
       }
       setTelemetryConsent(!!consent);
+      refreshTelemetryState();
       res.json({ ok: true });
     } catch (err) {
       console.error('[cloud-callback] Consent error:', err);
