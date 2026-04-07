@@ -62,6 +62,7 @@ async function flush() {
           hostname: hostname(),
           os: process.platform,
           version: config.version || null,
+          telemetry_consent: localAuth.telemetryConsent,
         },
       }),
       signal: AbortSignal.timeout(15000),

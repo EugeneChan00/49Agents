@@ -59,6 +59,106 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
   let tabHeld = false; // Track Tab key state globally (used for Tab+scroll canvas pan, Tab+key chords)
   let tutorialsCompleted = {};
 
+  // ---------------------------------------------------------------------------
+  // Client-side telemetry tracker (local mode only, respects consent)
+  // ---------------------------------------------------------------------------
+  const _telemetry = {
+    _active: false,
+    _queue: [],
+    _sessionStart: Date.now(),
+    _activeMs: 0,
+    _lastVisible: Date.now(),
+    _terminalInputCount: 0,
+    _panePeakCounts: {},
+    _paneOpenTimes: {},
+
+    init() {
+      fetch('/api/auth/mode').then(r => r.json()).then(m => {
+        if (m.mode !== 'local') return;
+        return fetch('/api/auth/telemetry-consent', { credentials: 'include' }).then(r => r.json());
+      }).then(d => {
+        if (!d || !d.consent) return;
+        this._active = true;
+        this._setupVisibility();
+        this.track('session.start', {
+          screen_width: screen.width,
+          screen_height: screen.height,
+          viewport_width: window.innerWidth,
+          viewport_height: window.innerHeight,
+          is_mobile: /Mobi|Android/i.test(navigator.userAgent),
+        });
+        setInterval(() => this.flush(), 30000);
+      }).catch(() => {});
+    },
+
+    track(type, data) {
+      if (!this._active) return;
+      this._queue.push({
+        event_type: type,
+        data: data || {},
+        ts: new Date().toISOString(),
+        sid: sessionStorage.getItem('_49a_sid'),
+      });
+      if (this._queue.length >= 20) this.flush();
+    },
+
+    flush() {
+      if (!this._active || this._queue.length === 0) return;
+      const batch = this._queue.splice(0);
+      const body = JSON.stringify({ events: batch });
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon('/api/telemetry/client-events', new Blob([body], { type: 'application/json' }));
+      } else {
+        fetch('/api/telemetry/client-events', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {});
+      }
+    },
+
+    _setupVisibility() {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+          this._activeMs += Date.now() - this._lastVisible;
+          this._trackSessionEnd();
+          this.flush();
+        } else {
+          this._lastVisible = Date.now();
+        }
+      });
+      window.addEventListener('beforeunload', () => {
+        this._trackSessionEnd();
+        this.flush();
+      });
+    },
+
+    _trackSessionEnd() {
+      const now = Date.now();
+      const totalActive = this._activeMs + (document.visibilityState === 'visible' ? now - this._lastVisible : 0);
+      this.track('session.end', {
+        duration_ms: now - this._sessionStart,
+        active_ms: totalActive,
+        idle_ms: (now - this._sessionStart) - totalActive,
+        pane_counts: this._panePeakCounts,
+        terminal_commands_sent: this._terminalInputCount,
+      });
+    },
+
+    trackPaneOpen(pane) {
+      const type = pane.type || 'terminal';
+      this.track('pane.open', { pane_type: type });
+      this._paneOpenTimes[pane.id] = Date.now();
+      const current = state.panes.filter(p => (p.type || 'terminal') === type).length;
+      this._panePeakCounts[type] = Math.max(this._panePeakCounts[type] || 0, current);
+    },
+
+    trackPaneClose(paneId, paneType) {
+      const openTime = this._paneOpenTimes[paneId];
+      this.track('pane.close', {
+        pane_type: paneType,
+        duration_ms: openTime ? Date.now() - openTime : null,
+      });
+      delete this._paneOpenTimes[paneId];
+    },
+  };
+
   // Expanded pane state
   let expandedPaneId = null;
 
@@ -1934,6 +2034,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     initNotifications();
     showPromoToasts();
     connectWebSocket();
+    _telemetry.init();
     // loadTerminalsFromServer is called after agents:list arrives via WS
 
     const hudContainer = createHudContainer();
@@ -2625,6 +2726,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
   }
 
   function showSettingsModal() {
+    _telemetry.track('feature.settings_open');
     const existing = document.getElementById('settings-modal');
     if (existing) { existing.remove(); return; }
 
@@ -2978,6 +3080,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
       if (!item) return;
       const themeKey = item.dataset.theme;
       applyTerminalTheme(themeKey);
+      _telemetry.track('feature.theme_change', { theme_name: themeKey });
       renderThemeList(themeSearch.value);
       // Update collapsed preview
       const t = TERMINAL_THEMES[themeKey];
@@ -3050,6 +3153,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
   function sendWs(type, payload, agentId) {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type, payload, agentId: agentId || activeAgentId }));
+      if (type === 'terminal:input') _telemetry._terminalInputCount++;
     }
   }
 
@@ -3708,7 +3812,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
         }
         // Fill in device from agent hostname if the agent didn't return one
         if (!pane.device && agentHostname) pane.device = agentHostname;
-        state.panes.push(pane);
+        state.panes.push(pane); _telemetry.trackPaneOpen(pane);
         cfg.render(pane);
       }
     });
@@ -3783,7 +3887,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
             if (meta.claudeSessionName) pane.claudeSessionName = meta.claudeSessionName;
             if (meta.shortcutNumber) pane.shortcutNumber = meta.shortcutNumber;
             if (meta.paneName) pane.paneName = meta.paneName;
-            state.panes.push(pane);
+            state.panes.push(pane); _telemetry.trackPaneOpen(pane);
             renderOfflinePlaceholder(pane);
           }
       }
@@ -4124,7 +4228,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
         agentId: resolvedAgentId
       };
 
-      state.panes.push(pane);
+      state.panes.push(pane); _telemetry.trackPaneOpen(pane);
       renderPane(pane);
       cloudSaveLayout(pane);
       // attachTerminal is called from initTerminal after a 100ms setTimeout.
@@ -4531,7 +4635,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
         agentId: resolvedAgentId
       };
 
-      state.panes.push(pane);
+      state.panes.push(pane); _telemetry.trackPaneOpen(pane);
       renderFilePane(pane);
       cloudSaveLayout(pane);
       saveRecentContext('file', pane.filePath, pane.fileName, resolvedAgentId);
@@ -4566,7 +4670,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
         agentId: activeAgentId
       };
 
-      state.panes.push(pane);
+      state.panes.push(pane); _telemetry.trackPaneOpen(pane);
       renderNotePane(pane);
       cloudSaveLayout(pane);
 
@@ -4789,7 +4893,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
         agentId: activeAgentId
       };
 
-      state.panes.push(pane);
+      state.panes.push(pane); _telemetry.trackPaneOpen(pane);
       renderIframePane(pane);
       cloudSaveLayout(pane);
       try { saveRecentContext('iframe', pane.url, new URL(pane.url).hostname); } catch (_) { saveRecentContext('iframe', pane.url, pane.url); }
@@ -4815,7 +4919,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
         url: iframeData.url,
         agentId: activeAgentId
       };
-      state.panes.push(pane);
+      state.panes.push(pane); _telemetry.trackPaneOpen(pane);
       renderIframePane(pane);
       cloudSaveLayout(pane);
       try { saveRecentContext('iframe', pane.url, new URL(pane.url).hostname); } catch (_) { saveRecentContext('iframe', pane.url, pane.url); }
@@ -4849,7 +4953,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
         agentId: resolvedAgentId
       };
 
-      state.panes.push(pane);
+      state.panes.push(pane); _telemetry.trackPaneOpen(pane);
       renderGitGraphPane(pane);
       cloudSaveLayout(pane);
       saveRecentContext('git-graph', pane.repoPath, pane.repoName, resolvedAgentId);
@@ -4879,6 +4983,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     try {
       const pane = state.panes.find(p => p.id === paneId);
       const paneType = pane?.type || 'terminal';
+      _telemetry.trackPaneClose(paneId, paneType);
 
       if (paneType === 'terminal') {
         // Close terminal via WebSocket
@@ -5879,7 +5984,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
         agentId: resolvedAgentId
       };
 
-      state.panes.push(pane);
+      state.panes.push(pane); _telemetry.trackPaneOpen(pane);
       renderFolderPane(pane);
       cloudSaveLayout(pane);
       saveRecentContext('folder', pane.folderPath, pane.folderPath.split('/').filter(Boolean).pop() || pane.folderPath, resolvedAgentId);
@@ -5911,7 +6016,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
         agentId: resolvedAgentId
       };
 
-      state.panes.push(pane);
+      state.panes.push(pane); _telemetry.trackPaneOpen(pane);
       renderBeadsPane(pane);
       cloudSaveLayout(pane);
       saveRecentContext('beads', pane.projectPath, pane.projectPath.split('/').filter(Boolean).pop() || pane.projectPath, resolvedAgentId);
@@ -6298,7 +6403,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
           device: fp.device || null,
           agentId: agentId
         };
-        state.panes.push(newPane);
+        state.panes.push(newPane); _telemetry.trackPaneOpen(newPane);
         renderFilePane(newPane);
         cloudSaveLayout(newPane);
       } catch (e) {
@@ -8505,6 +8610,11 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
       console.error('[App] focusPane called with undefined paneData');
       return;
     }
+    const prevPane = lastFocusedPaneId ? state.panes.find(p => p.id === lastFocusedPaneId) : null;
+    _telemetry.track('pane.focus', {
+      pane_type: paneData.type || 'terminal',
+      previous_pane_type: prevPane ? (prevPane.type || 'terminal') : null,
+    });
     paneData.zIndex = state.nextZIndex++;
     const paneEl = document.getElementById(`pane-${paneData.id}`);
     if (paneEl) {
@@ -9186,7 +9296,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
         includeSubdirs: false,
       };
 
-      state.panes.push(pane);
+      state.panes.push(pane); _telemetry.trackPaneOpen(pane);
       renderConversationsPane(pane);
       cloudSaveLayout(pane);
       saveRecentContext('conversations', pane.dirPath, pane.dirPath.split('/').filter(Boolean).pop() || pane.dirPath, resolvedAgentId);
@@ -9467,7 +9577,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
           device: paneData.device || null,
           agentId: paneData.agentId,
         };
-        state.panes.push(tPane);
+        state.panes.push(tPane); _telemetry.trackPaneOpen(tPane);
         renderPane(tPane);
         cloudSaveLayout(tPane);
 
