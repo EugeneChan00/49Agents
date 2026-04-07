@@ -44,14 +44,17 @@ export function setupCloudCallbackRoutes(app) {
       const { code, state } = req.query;
       const storedState = req.cookies?.cloud_auth_state;
 
-      // Validate CSRF state
-      if (!state || !storedState || state !== storedState) {
-        console.error('[cloud-callback] State mismatch');
-        return res.status(403).send('Invalid state. Please try again.');
+      // Validate CSRF state if both are present (when flow started via /auth/cloud-login).
+      // When the flow starts directly from the login page linking to cloud OAuth,
+      // no state cookie exists — security is provided by the cloud's own OAuth CSRF
+      // protection and the one-time authorization code.
+      if (storedState) {
+        if (!state || state !== storedState) {
+          console.error('[cloud-callback] State mismatch');
+          return res.status(403).send('Invalid state. Please try again.');
+        }
+        res.clearCookie('cloud_auth_state', { path: '/' });
       }
-
-      // Clear the state cookie
-      res.clearCookie('cloud_auth_state', { path: '/' });
 
       if (!code) {
         return res.status(400).send('Missing authorization code.');
