@@ -260,7 +260,15 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
   function updateShortcutBadge(paneData) {
     const paneEl = document.getElementById(`pane-${paneData.id}`);
     if (!paneEl) return;
-    // Remove any existing badge or input
+
+    // Checkpoint pane badge
+    const ckptBadge = paneEl.querySelector('.checkpoint-pane-badge');
+    if (ckptBadge) {
+      ckptBadge.textContent = paneData.shortcutNumber ? `Tab+${paneData.shortcutNumber}` : 'Tab+?';
+      return;
+    }
+
+    // Regular pane badge
     paneEl.querySelectorAll('.pane-shortcut-badge').forEach(el => el.remove());
     if (paneData.shortcutNumber) {
       const headerRight = paneEl.querySelector('.pane-header-right');
@@ -280,7 +288,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     closeShortcutAssignPopup();
     const paneEl = document.getElementById(`pane-${paneData.id}`);
     if (!paneEl) return;
-    const badge = paneEl.querySelector('.pane-shortcut-badge');
+    const badge = paneEl.querySelector('.pane-shortcut-badge') || paneEl.querySelector('.checkpoint-pane-badge');
     if (!badge) return;
 
     const rect = badge.getBoundingClientRect();
