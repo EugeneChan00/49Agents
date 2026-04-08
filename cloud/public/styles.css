@@ -6227,11 +6227,11 @@ body.cursor-suppressed .pane { pointer-events: none !important; }
   text-align: center;
 }
 
-/* Projects Sidebar (center-top, configurable) */
+/* Projects Sidebar (left or right, configurable in settings) */
 #projects-sidebar {
   position: fixed;
   top: 76px;
-  left: 50%;
+  right: 16px;
   z-index: 1000;
   width: 280px;
   max-height: calc(100vh - 200px);
@@ -6246,14 +6246,12 @@ body.cursor-suppressed .pane { pointer-events: none !important; }
     0 0 0 1px rgba(218, 119, 86, 0.1),
     inset 0 1px 0 rgba(255, 255, 255, 0.05);
   overflow-y: auto;
-  transform: translateX(-50%) translateY(-20px);
   opacity: 0;
-  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease;
+  transition: opacity 0.2s ease;
   pointer-events: none;
 }
 
 #projects-sidebar.visible {
-  transform: translateX(-50%);
   opacity: 1;
   pointer-events: auto;
 }
@@ -6399,6 +6397,32 @@ body.cursor-suppressed .pane { pointer-events: none !important; }
   padding: 2px 5px;
   border-radius: 3px;
   flex-shrink: 0;
+}
+
+.ps-delete-btn {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.25);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.ps-item:hover .ps-delete-btn {
+  opacity: 1;
+}
+
+.ps-delete-btn:hover {
+  color: rgba(239, 68, 68, 0.8);
+  background: rgba(239, 68, 68, 0.1);
 }
 
 .ps-empty {

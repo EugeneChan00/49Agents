@@ -60,7 +60,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
   let tabHeld = false; // Track Tab key state globally (used for Tab+scroll canvas pan, Tab+key chords)
   let tutorialsCompleted = {};
   let projectsSidebarVisible = false; // Tab+P toggles projects sidebar
-  let projectsSidebarPosition = 'center'; // 'center' (top-center, expands down) or 'left' or 'right'
+  let projectsSidebarPosition = 'right'; // 'left' or 'right'
   let teleportAnimation = true; // false = instant teleport
 
   // ---------------------------------------------------------------------------
@@ -2879,7 +2879,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
           <div style="font-size:11px;color:#6a6a8a;">Where the sidebar appears (Tab+P)</div>
         </div>
         <div id="settings-sidebar-pos" style="display:flex;gap:4px;">
-          ${['left', 'center', 'right'].map(pos => `<button class="settings-sidebar-pos-btn" data-pos="${pos}" style="padding:4px 10px;border-radius:4px;border:1px solid ${projectsSidebarPosition === pos ? 'rgba(var(--accent-rgb),0.4)' : 'rgba(255,255,255,0.08)'};background:${projectsSidebarPosition === pos ? 'rgba(var(--accent-rgb),0.2)' : 'transparent'};color:${projectsSidebarPosition === pos ? '#fff' : '#8b8bb0'};font-size:11px;cursor:pointer;font-family:inherit;">${pos}</button>`).join('')}
+          ${['left', 'right'].map(pos => `<button class="settings-sidebar-pos-btn" data-pos="${pos}" style="padding:4px 10px;border-radius:4px;border:1px solid ${projectsSidebarPosition === pos ? 'rgba(var(--accent-rgb),0.4)' : 'rgba(255,255,255,0.08)'};background:${projectsSidebarPosition === pos ? 'rgba(var(--accent-rgb),0.2)' : 'transparent'};color:${projectsSidebarPosition === pos ? '#fff' : '#8b8bb0'};font-size:11px;cursor:pointer;font-family:inherit;">${pos}</button>`).join('')}
         </div>
       </div>
 
@@ -10397,9 +10397,50 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
       <button class="checkpoint-pane-close" aria-label="Close"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     `;
 
-    // Make draggable
-    setupPaneListeners(pane, paneData);
     canvas.appendChild(pane);
+
+    // Draggable via circle
+    const circleEl = pane.querySelector('.checkpoint-pane-circle');
+    let ckDragging = false, ckMoved = false, ckStartX, ckStartY, ckOrigX, ckOrigY;
+    circleEl.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      ckDragging = true;
+      ckMoved = false;
+      ckStartX = e.clientX;
+      ckStartY = e.clientY;
+      ckOrigX = paneData.x;
+      ckOrigY = paneData.y;
+      // Bring to front
+      paneData.zIndex = state.nextZIndex++;
+      pane.style.zIndex = paneData.zIndex;
+
+      const moveH = (me) => {
+        if (!ckDragging) return;
+        const dx = (me.clientX - ckStartX) / state.zoom;
+        const dy = (me.clientY - ckStartY) / state.zoom;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) ckMoved = true;
+        paneData.x = ckOrigX + dx;
+        paneData.y = ckOrigY + dy;
+        pane.style.left = paneData.x + 'px';
+        pane.style.top = paneData.y + 'px';
+      };
+      const upH = () => {
+        ckDragging = false;
+        document.removeEventListener('mousemove', moveH);
+        document.removeEventListener('mouseup', upH);
+        if (ckMoved) cloudSaveLayout(paneData);
+      };
+      document.addEventListener('mousemove', moveH);
+      document.addEventListener('mouseup', upH);
+    });
+
+    // Click circle (no drag) to teleport
+    circleEl.addEventListener('click', (e) => {
+      if (ckMoved) return;
+      e.stopPropagation();
+      navigateToCheckpointPane(paneData);
+    });
 
     // Close button
     pane.querySelector('.checkpoint-pane-close').addEventListener('click', (e) => {
@@ -10416,7 +10457,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
       input.value = paneData.paneName || paneData.checkpointName || 'Checkpoint';
       input.className = 'checkpoint-rename-input';
       nameEl.style.display = 'none';
-      pane.querySelector('.checkpoint-pane-circle').insertAdjacentElement('afterend', input);
+      circleEl.insertAdjacentElement('afterend', input);
       input.focus();
       input.select();
 
@@ -10447,12 +10488,6 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
         showShortcutAssignPopup(paneData);
       });
     }
-
-    // Double-click anywhere to teleport (center viewport on this checkpoint)
-    pane.addEventListener('dblclick', (e) => {
-      e.stopPropagation();
-      navigateToCheckpointPane(paneData);
-    });
   }
 
   // Create a new project via placement mode (draw rectangle)
@@ -10608,20 +10643,15 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     // Reset positioning
     sidebar.style.left = '';
     sidebar.style.right = '';
-    sidebar.style.top = '';
     sidebar.style.transform = '';
 
     if (projectsSidebarPosition === 'left') {
       sidebar.style.left = '16px';
-      sidebar.style.top = '76px';
-    } else if (projectsSidebarPosition === 'right') {
-      sidebar.style.right = '16px';
-      sidebar.style.top = '76px';
+      sidebar.style.right = 'auto';
     } else {
-      // center (default)
-      sidebar.style.left = '50%';
-      sidebar.style.top = '76px';
-      sidebar.style.transform = sidebar.classList.contains('visible') ? 'translateX(-50%)' : 'translateX(-50%) translateY(-20px)';
+      // right (default)
+      sidebar.style.right = '16px';
+      sidebar.style.left = 'auto';
     }
   }
 
@@ -10632,7 +10662,6 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
       sidebar = createProjectsSidebar();
     }
     sidebar.classList.toggle('visible', projectsSidebarVisible);
-    applyProjectsSidebarPosition();
     if (projectsSidebarVisible) {
       renderProjectsSidebar();
     }
@@ -10686,6 +10715,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
             <div class="ps-item-name">${escapeHtml(ckpt.paneName || ckpt.checkpointName || 'Checkpoint')}</div>
           </div>
           ${ckptBadge}
+          <button class="ps-delete-btn" data-delete-pane-id="${ckpt.id}" title="Delete checkpoint"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>`;
       }
     }
@@ -10706,10 +10736,23 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     });
 
     content.querySelectorAll('.ps-checkpoint').forEach(el => {
-      el.addEventListener('click', () => {
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('.ps-delete-btn')) return; // handled below
         const paneId = el.dataset.paneId;
         const paneData = state.panes.find(p => p.id === paneId);
         if (paneData) navigateToCheckpointPane(paneData);
+      });
+    });
+
+    // Delete buttons for checkpoints in sidebar
+    content.querySelectorAll('.ps-delete-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const paneId = btn.dataset.deletePaneId;
+        if (paneId) {
+          deletePane(paneId);
+          renderProjectsSidebar();
+        }
       });
     });
   }
