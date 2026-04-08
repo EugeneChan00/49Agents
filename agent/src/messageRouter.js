@@ -25,6 +25,40 @@ try {
   localHostname = execSync('hostname', { encoding: 'utf-8' }).trim();
 } catch {}
 
+/**
+ * Get OAuth access token from env var, credentials file, or macOS Keychain.
+ * Returns the token string or null if unavailable.
+ */
+async function getOAuthToken() {
+  // 1. Environment variable (works everywhere, set by Claude Desktop or manually)
+  if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+    return process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  }
+
+  // 2. Credentials file (Linux/Windows)
+  const credPath = join(homedir(), '.claude', '.credentials.json');
+  try {
+    const creds = JSON.parse(readFileSync(credPath, 'utf-8'));
+    const token = creds.claudeAiOauth?.accessToken;
+    if (token) return token;
+  } catch {}
+
+  // 3. macOS Keychain fallback
+  if (process.platform === 'darwin') {
+    try {
+      const { stdout } = await execAsync(
+        'security find-generic-password -s "Claude Code-credentials" -w',
+        { timeout: 5000 }
+      );
+      const keychainData = JSON.parse(stdout.trim());
+      const token = keychainData.claudeAiOauth?.accessToken;
+      if (token) return token;
+    } catch {}
+  }
+
+  return null;
+}
+
 function expandHome(p) {
   if (p === '~' || p === '~/') return homedir();
   if (p.startsWith('~/')) return join(homedir(), p.slice(2));
@@ -451,17 +485,9 @@ export function createMessageRouter(sendToRelay, options = {}) {
             return respond(200, usageCache);
           }
           try {
-            const credPath = join(homedir(), '.claude', '.credentials.json');
-            let creds;
-            try {
-              creds = JSON.parse(readFileSync(credPath, 'utf-8'));
-            } catch (readErr) {
-              console.warn(`[usage] Cannot read credentials at ${credPath}:`, readErr.code || readErr.message);
-              return respond(503, { error: `Cannot read credentials: ${readErr.code || readErr.message}` });
-            }
-            const token = creds.claudeAiOauth?.accessToken;
+            const token = await getOAuthToken();
             if (!token) {
-              console.warn('[usage] No claudeAiOauth.accessToken in credentials file');
+              console.warn('[usage] No OAuth token found (env, credentials file, or macOS Keychain)');
               return respond(503, { error: 'Claude credentials not available' });
             }
 
