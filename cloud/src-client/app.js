@@ -7722,6 +7722,23 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     }
   }
 
+  // Debounce helper: batch rapid scroll events into a single terminal:scroll WS message.
+  // 75ms window collapses trackpad flicks (5-10 wheel events in ~50ms) into one message.
+  // Defined at IIFE level so both initTerminal (wheel handler) and setupCanvasInteraction (touch handler) can access it.
+  function accumulateServerScroll(terminalId, agentId, lines) {
+    const termRef = terminals.get(terminalId);
+    if (!termRef) return;
+    termRef._scrollDebounceAccum = (termRef._scrollDebounceAccum || 0) + lines;
+    if (termRef._scrollDebounceTimer) clearTimeout(termRef._scrollDebounceTimer);
+    termRef._scrollDebounceTimer = setTimeout(() => {
+      const accumulated = termRef._scrollDebounceAccum;
+      termRef._scrollDebounceAccum = 0;
+      if (accumulated !== 0) {
+        sendWs('terminal:scroll', { terminalId, lines: accumulated }, agentId);
+      }
+    }, 75);
+  }
+
   // Initialize xterm.js for a pane
   function initTerminal(paneEl, paneData) {
     const container = paneEl.querySelector('.terminal-container');
@@ -11619,22 +11636,6 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
       }
     }, { passive: false, capture: true });
     canvasContainer.addEventListener('contextmenu', (e) => e.preventDefault());
-
-    // Debounce helper: batch rapid scroll events into a single terminal:scroll WS message.
-    // 75ms window collapses trackpad flicks (5-10 wheel events in ~50ms) into one message.
-    function accumulateServerScroll(terminalId, agentId, lines) {
-      const termRef = terminals.get(terminalId);
-      if (!termRef) return;
-      termRef._scrollDebounceAccum = (termRef._scrollDebounceAccum || 0) + lines;
-      if (termRef._scrollDebounceTimer) clearTimeout(termRef._scrollDebounceTimer);
-      termRef._scrollDebounceTimer = setTimeout(() => {
-        const accumulated = termRef._scrollDebounceAccum;
-        termRef._scrollDebounceAccum = 0;
-        if (accumulated !== 0) {
-          sendWs('terminal:scroll', { terminalId, lines: accumulated }, agentId);
-        }
-      }, 75);
-    }
 
     // Capture-phase: 2-finger touch on panes -> emulate mouse wheel scroll
     // Sends mouse scroll escape sequences directly to terminal for tmux/zellij/vim
