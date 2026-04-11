@@ -11566,18 +11566,15 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     }, { passive: false, capture: true });
     canvasContainer.addEventListener('contextmenu', (e) => e.preventDefault());
 
-    // Capture-phase: 2-finger touch on panes -> emulate mouse wheel for terminal scroll
-    // On empty canvas space, 2-finger already works via handleTouchStart
+    // Capture-phase: 2-finger touch on panes -> scroll terminal/editor content
     let _twoFingerPrevY = null;
-    let _twoFingerPrevX = null;
     canvasContainer.addEventListener('touchstart', (e) => {
       if (e.touches.length === 2) {
-        const onPane = e.target.closest('.pane');
-        if (onPane) {
+        const paneEl = e.target.closest('.pane');
+        if (paneEl) {
           e.preventDefault();
           e.stopPropagation();
           _twoFingerPrevY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-          _twoFingerPrevX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
         }
       }
     }, { passive: false, capture: true });
@@ -11586,25 +11583,33 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
         e.preventDefault();
         e.stopPropagation();
         const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-        const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
         const deltaY = _twoFingerPrevY - midY;
-        const deltaX = _twoFingerPrevX - midX;
         _twoFingerPrevY = midY;
-        _twoFingerPrevX = midX;
-        // Dispatch wheel event to the pane so xterm/editor handles scrolling
-        const target = e.target.closest('.pane') || e.target;
-        target.dispatchEvent(new WheelEvent('wheel', {
-          deltaY: deltaY * 2,
-          deltaX: deltaX * 2,
-          bubbles: true,
-          cancelable: true,
-        }));
+
+        // Find the pane and scroll its content
+        const paneEl = e.target.closest('.pane');
+        if (paneEl) {
+          const paneId = paneEl.id.replace('pane-', '');
+          const termInfo = terminals.get(paneId);
+          if (termInfo && termInfo.xterm) {
+            // xterm.js: scroll ~1 line per 15px of finger movement
+            const lines = Math.round(deltaY / 15);
+            if (lines !== 0) termInfo.xterm.scrollLines(lines);
+          } else {
+            // For non-terminal panes (notes, files with Monaco), scroll via wheel on viewport
+            const viewport = paneEl.querySelector('.monaco-editor .scrollable-element') ||
+                             paneEl.querySelector('[class*="scroll"]') ||
+                             paneEl.querySelector('.pane-content');
+            if (viewport) {
+              viewport.scrollTop += deltaY;
+            }
+          }
+        }
       }
     }, { passive: false, capture: true });
     canvasContainer.addEventListener('touchend', (e) => {
       if (e.touches.length < 2) {
         _twoFingerPrevY = null;
-        _twoFingerPrevX = null;
       }
     }, { capture: true });
 
