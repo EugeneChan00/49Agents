@@ -190,6 +190,10 @@ export function createMessageRouter(sendToRelay, options = {}) {
       terminalManager.scrollTerminal(payload.terminalId, payload.lines);
     },
 
+    [MSG.TERMINAL_EXIT_COPY_MODE]: (payload) => {
+      terminalManager.exitCopyMode(payload.terminalId);
+    },
+
     [MSG.TERMINAL_CLOSE]: async (payload) => {
       wiredTerminals.delete(payload.terminalId);
       await terminalManager.closeTerminal(payload.terminalId);
