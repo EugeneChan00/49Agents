@@ -8467,20 +8467,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
       focusTerminalInput(paneData.id);
     }, { passive: true, capture: true });
 
-    // Auto-fullscreen panes on phone tap (all pane types)
-    paneEl.addEventListener('touchend', (e) => {
-      if (window.innerWidth > 768) return;
-      if (expandedPaneId) return;
-      if (quickViewActive || deviceHoverActive) return;
-      const touch = e.changedTouches && e.changedTouches[0];
-      if (!touch) return;
-      const dx = Math.abs(touch.clientX - _touchStartX);
-      const dy = Math.abs(touch.clientY - _touchStartY);
-      const elapsed = Date.now() - _touchStartTime;
-      if (dx < 15 && dy < 15 && elapsed < 400) {
-        expandPane(paneData.id);
-      }
-    }, { passive: true });
+    // Auto-fullscreen on mobile tap removed
 
     // Focus pane and terminal input on hover
     paneEl.addEventListener('mouseenter', () => {
