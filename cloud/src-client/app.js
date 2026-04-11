@@ -11566,6 +11566,14 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     }, { passive: false, capture: true });
     canvasContainer.addEventListener('contextmenu', (e) => e.preventDefault());
 
+    // Capture-phase: intercept 2-finger touch for canvas pan/zoom before xterm or pane handlers
+    canvasContainer.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 2) {
+        e.stopPropagation(); // stop xterm/pane from consuming it
+        handleTouchStart(e); // route to canvas pan/zoom handler
+      }
+    }, { passive: false, capture: true });
+
     // Middle mouse button: force canvas pan even over panes (capture phase)
     canvasContainer.addEventListener('mousedown', handleMiddleMousePan, true);
 
@@ -12650,7 +12658,12 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
   let momentumRaf = null;
 
   function handleTouchStart(e) {
-    if (e.target !== canvas && e.target !== canvasContainer) return;
+    // Allow 2-finger gestures from anywhere (panes, terminals) for canvas pan/zoom
+    if (e.touches.length === 2) {
+      // Let it through regardless of target
+    } else if (e.target !== canvas && e.target !== canvasContainer) {
+      return;
+    }
 
     // Cancel any in-flight momentum animation
     if (momentumRaf) { cancelAnimationFrame(momentumRaf); momentumRaf = null; }
