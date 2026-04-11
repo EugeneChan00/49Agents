@@ -7925,41 +7925,8 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
         return;
       }
 
-      // Normal shell — hybrid scroll: local buffer first, tmux copy-mode when exhausted
-      const termRef2 = terminals.get(paneData.id);
-      if (termRef2?._currentCommand === 'tmux') {
-        xterm.scrollLines(lines);
-        return;
-      }
-      if (lines < 0) {
-        // Scrolling UP
-        const buf = xterm.buffer.active;
-        if (buf.viewportY === 0 && !termRef2._inCopyMode) {
-          termRef2._inCopyMode = true;
-          termRef2._copyModeScrollAccum = 0;
-          xterm.scrollToBottom();
-        }
-        if (termRef2._inCopyMode) {
-          termRef2._copyModeScrollAccum += Math.abs(lines);
-          accumulateServerScroll(paneData.id, paneData.agentId, lines);
-        } else {
-          xterm.scrollLines(lines);
-        }
-      } else {
-        // Scrolling DOWN
-        if (termRef2._inCopyMode) {
-          termRef2._copyModeScrollAccum -= lines;
-          if (termRef2._copyModeScrollAccum <= 0) {
-            termRef2._inCopyMode = false;
-            termRef2._copyModeScrollAccum = 0;
-            xterm.scrollToBottom();
-          } else {
-            accumulateServerScroll(paneData.id, paneData.agentId, lines);
-          }
-        } else {
-          xterm.scrollLines(lines);
-        }
-      }
+      // Normal shell — scroll through xterm's local buffer
+      xterm.scrollLines(lines);
     }, { passive: false, capture: true });
 
     // Store terminal info first
@@ -7974,17 +7941,6 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
       // window anyway (loading overlay is showing).
       const termRef = terminals.get(paneData.id);
       if (!termRef || !termRef._attached) return;
-      // If in copy-mode from hybrid scroll, exit it before forwarding input
-      if (termRef._inCopyMode) {
-        termRef._inCopyMode = false;
-        termRef._copyModeScrollAccum = 0;
-        if (termRef._scrollDebounceTimer) {
-          clearTimeout(termRef._scrollDebounceTimer);
-          termRef._scrollDebounceAccum = 0;
-        }
-        sendWs('terminal:exitCopyMode', { terminalId: paneData.id }, paneData.agentId);
-        xterm.scrollToBottom();
-      }
       const encoded = btoa(unescape(encodeURIComponent(data)));
       // Broadcast mode: send to all selected terminal panes
       if (selectedPaneIds.size > 1) {
@@ -11684,35 +11640,9 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
                     cancelable: true,
                   }));
                 }
-              } else if (termInfo._currentCommand === 'tmux') {
-                // Nested tmux — xterm buffer only; inner session has its own copy-mode
-                xterm.scrollLines(dir > 0 ? -1 : 1);
               } else {
-                // No mouse reporting — hybrid scroll: local buffer first, tmux copy-mode when exhausted
-                const lines = dir > 0 ? -1 : 1; // dir > 0 = finger moved up = scroll up = negative lines
-                const buf = xterm.buffer.active;
-                if (lines < 0 && buf.viewportY === 0 && !termInfo._inCopyMode) {
-                  termInfo._inCopyMode = true;
-                  termInfo._copyModeScrollAccum = 0;
-                  xterm.scrollToBottom();
-                }
-                if (termInfo._inCopyMode) {
-                  if (lines < 0) {
-                    termInfo._copyModeScrollAccum += Math.abs(lines);
-                  } else {
-                    termInfo._copyModeScrollAccum -= lines;
-                    if (termInfo._copyModeScrollAccum <= 0) {
-                      termInfo._inCopyMode = false;
-                      termInfo._copyModeScrollAccum = 0;
-                      xterm.scrollToBottom();
-                    }
-                  }
-                  if (termInfo._inCopyMode) {
-                    accumulateServerScroll(paneId, getPaneAgentId(paneId), lines);
-                  }
-                } else {
-                  xterm.scrollLines(lines);
-                }
+                // No mouse reporting — scroll through xterm's local buffer
+                xterm.scrollLines(dir > 0 ? -1 : 1);
               }
             }
           } else {
