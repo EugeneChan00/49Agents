@@ -530,15 +530,25 @@ export class TmuxService {
     if (!terminal) return;
     const session = escapeShellArg(terminal.tmuxSession);
     const direction = lines < 0 ? 'scroll-up' : 'scroll-down';
-    const count = Math.min(Math.abs(lines), 15);
+    const count = Math.min(Math.abs(lines), 500);
+    if (count === 0) return;
     try {
       // Enter copy-mode with -e (auto-exit at bottom), then scroll
       await execAsync(`tmux copy-mode -e -t ${session} 2>/dev/null || true`);
-      for (let i = 0; i < count; i++) {
-        await execAsync(`tmux send-keys -t ${session} -X ${direction}`);
-      }
+      await execAsync(`tmux send-keys -t ${session} -X -N ${count} ${direction}`);
     } catch {
       // Scroll might fail if terminal is detached
+    }
+  }
+
+  async exitCopyMode(terminalId) {
+    const terminal = terminals.get(terminalId);
+    if (!terminal) return;
+    const session = escapeShellArg(terminal.tmuxSession);
+    try {
+      await execAsync(`tmux send-keys -t ${session} -X cancel 2>/dev/null || true`);
+    } catch {
+      // May fail if not in copy-mode — safe to ignore
     }
   }
 
@@ -585,17 +595,17 @@ export class TmuxService {
     const results = {};
     try {
       const { stdout } = await execAsync(
-        `tmux list-panes -a -F "#{session_name}|#{pane_current_command}|#{pane_current_path}|#{pane_active}|#{pane_pid}|#{alternate_on}" 2>/dev/null`
+        `tmux list-panes -a -F "#{session_name}|#{pane_current_command}|#{pane_current_path}|#{pane_active}|#{pane_pid}|#{alternate_on}|#{pane_in_mode}" 2>/dev/null`
       );
       for (const line of stdout.trim().split('\n')) {
         if (!line || !line.startsWith('tc2-')) continue;
         const parts = line.split('|');
-        if (parts.length < 6) continue;
-        const [session, command, cwd, active, pid, altOn] = parts;
+        if (parts.length < 7) continue;
+        const [session, command, cwd, active, pid, altOn, inMode] = parts;
         if (active !== '1') continue; // Only active panes
         const id = session.replace('tc2-', '');
         if (!terminals.has(id)) continue;
-        results[id] = { session, command, cwd, pid, isClaude: /^claude/i.test(command), alternateOn: altOn === '1' };
+        results[id] = { session, command, cwd, pid, isClaude: /^claude/i.test(command), alternateOn: altOn === '1', inCopyMode: inMode === '1' };
       }
     } catch {
       // Silently fail - returns empty results
@@ -745,7 +755,7 @@ export class TmuxService {
     for (const id of nonClaudeIds) {
       const info = sessionInfo[id];
       if (!info.isClaude) {
-        results[id] = { isClaude: false, state: null, cwd: info.cwd || null, alternateOn: info.alternateOn };
+        results[id] = { isClaude: false, state: null, cwd: info.cwd || null, alternateOn: info.alternateOn, inCopyMode: info.inCopyMode };
       }
     }
 
@@ -763,12 +773,12 @@ export class TmuxService {
         const location = await this.getCachedLocation(info.cwd);
         const claudeSessionId = await this.resolveClaudeSessionForPane(info.pid);
         const claudeSessionName = await resolveClaudeSessionName(claudeSessionId, info.cwd);
-        return [id, { isClaude: true, state, command: 'claude', location, cwd: info.cwd, claudeSessionId, claudeSessionName, alternateOn: info.alternateOn }];
+        return [id, { isClaude: true, state, command: 'claude', location, cwd: info.cwd, claudeSessionId, claudeSessionName, alternateOn: info.alternateOn, inCopyMode: info.inCopyMode }];
       } catch {
         const location = await this.getCachedLocation(info.cwd);
         const claudeSessionId = await this.resolveClaudeSessionForPane(info.pid);
         const claudeSessionName = await resolveClaudeSessionName(claudeSessionId, info.cwd);
-        return [id, { isClaude: true, state: 'working', command: 'claude', location, cwd: info.cwd, claudeSessionId, claudeSessionName, alternateOn: info.alternateOn }];
+        return [id, { isClaude: true, state: 'working', command: 'claude', location, cwd: info.cwd, claudeSessionId, claudeSessionName, alternateOn: info.alternateOn, inCopyMode: info.inCopyMode }];
       }
     });
 

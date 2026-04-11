@@ -329,6 +329,13 @@ export const terminalManager = {
   },
 
   /**
+   * Exit tmux copy-mode for a terminal
+   */
+  exitCopyMode(terminalId) {
+    tmuxService.exitCopyMode(terminalId);
+  },
+
+  /**
    * Close a terminal (kill tmux session + stop ttyd)
    */
   async closeTerminal(terminalId) {

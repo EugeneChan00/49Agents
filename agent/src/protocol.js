@@ -17,6 +17,7 @@ export const MSG = {
   TERMINAL_OUTPUT: 'terminal:output',
   TERMINAL_RESIZE: 'terminal:resize',
   TERMINAL_SCROLL: 'terminal:scroll',
+  TERMINAL_EXIT_COPY_MODE: 'terminal:exitCopyMode',
   TERMINAL_CLOSE: 'terminal:close',
   TERMINAL_CLOSED: 'terminal:closed',
   TERMINAL_DETACH: 'terminal:detach',
