@@ -98,7 +98,7 @@ export function setupWebSocketRelay(server, options = {}) {
     zlibDeflateOptions: { level: 1 }, // fastest compression
     threshold: 128, // only compress messages > 128 bytes
   };
-  const maxPayload = 1 * 1024 * 1024; // 1 MB — prevents memory exhaustion from oversized messages
+  const maxPayload = 16 * 1024 * 1024; // 16 MB — must accommodate base64-encoded terminal scrollback from agents
   const browserWss = new WebSocketServer({ noServer: true, perMessageDeflate: wsCompression, maxPayload });
   const agentWss = new WebSocketServer({ noServer: true, perMessageDeflate: wsCompression, maxPayload });
   const latestAgentVersion = options.latestAgentVersion || null;

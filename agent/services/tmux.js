@@ -474,12 +474,11 @@ export class TmuxService {
       }
 
       // -e = include ANSI escape sequences (colors), -p = print to stdout
-      // -S - = from start of history, -E -1 = stop before the visible screen
-      //   (ttyd sends the visible screen naturally, so we only need scrollback)
-      // maxBuffer raised to 10MB — default 1MB silently truncates long histories
+      // -S -5000 = last 5000 lines of history (caps ~400KB raw, ~530KB base64)
+      // -E -1 = stop before the visible screen (ttyd sends visible screen naturally)
       const { stdout } = await execAsync(
-        `tmux capture-pane -e -t ${escapeShellArg(terminal.tmuxSession)} -p -S - -E -1`,
-        { maxBuffer: 10 * 1024 * 1024, timeout: 3000 }
+        `tmux capture-pane -e -t ${escapeShellArg(terminal.tmuxSession)} -p -S -5000 -E -1`,
+        { maxBuffer: 5 * 1024 * 1024, timeout: 3000 }
       );
       return stdout;
     } catch {
