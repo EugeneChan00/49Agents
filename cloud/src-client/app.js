@@ -11566,8 +11566,10 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     }, { passive: false, capture: true });
     canvasContainer.addEventListener('contextmenu', (e) => e.preventDefault());
 
-    // Capture-phase: 2-finger touch on panes -> scroll terminal/editor content
+    // Capture-phase: 2-finger touch on panes -> emulate mouse wheel scroll
+    // Sends mouse scroll escape sequences directly to terminal for tmux/zellij/vim
     let _twoFingerPrevY = null;
+    let _twoFingerAccum = 0;
     canvasContainer.addEventListener('touchstart', (e) => {
       if (e.touches.length === 2) {
         const paneEl = e.target.closest('.pane');
@@ -11575,6 +11577,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
           e.preventDefault();
           e.stopPropagation();
           _twoFingerPrevY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+          _twoFingerAccum = 0;
         }
       }
     }, { passive: false, capture: true });
@@ -11585,18 +11588,40 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
         const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
         const deltaY = _twoFingerPrevY - midY;
         _twoFingerPrevY = midY;
+        _twoFingerAccum += deltaY;
 
-        // Find the pane and scroll its content
         const paneEl = e.target.closest('.pane');
         if (paneEl) {
           const paneId = paneEl.id.replace('pane-', '');
           const termInfo = terminals.get(paneId);
-          if (termInfo && termInfo.xterm) {
-            // xterm.js: scroll ~1 line per 15px of finger movement
-            const lines = Math.round(deltaY / 15);
-            if (lines !== 0) termInfo.xterm.scrollLines(lines);
+          if (termInfo && termInfo.xterm && termInfo._attached) {
+            // Accumulate movement and send scroll events per ~30px threshold
+            const threshold = 30;
+            while (Math.abs(_twoFingerAccum) >= threshold) {
+              const dir = _twoFingerAccum > 0 ? 1 : -1; // positive = scroll up
+              _twoFingerAccum -= dir * threshold;
+              // First try: redispatch as wheel event to xterm-screen
+              // This works when xterm has mouse reporting active (vim, htop)
+              const xterm = termInfo.xterm;
+              if (xterm._core?.coreMouseService?.areMouseEventsActive) {
+                const xtermScreen = paneEl.querySelector('.xterm-screen');
+                if (xtermScreen) {
+                  xtermScreen.dispatchEvent(new WheelEvent('wheel', {
+                    deltaY: dir > 0 ? -33 : 33,
+                    deltaMode: 0,
+                    bubbles: true,
+                    cancelable: true,
+                  }));
+                }
+              } else {
+                // No mouse reporting — send arrow keys for tmux/zellij scrollback
+                const arrow = dir > 0 ? '\x1b[A' : '\x1b[B';
+                const encoded = btoa(unescape(encodeURIComponent(arrow)));
+                sendWs('terminal:input', { terminalId: paneId, data: encoded }, getPaneAgentId(paneId));
+              }
+            }
           } else {
-            // For non-terminal panes (notes, files with Monaco), scroll via wheel on viewport
+            // Non-terminal panes (Monaco editor) — scroll viewport
             const viewport = paneEl.querySelector('.monaco-editor .scrollable-element') ||
                              paneEl.querySelector('[class*="scroll"]') ||
                              paneEl.querySelector('.pane-content');
@@ -11610,6 +11635,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     canvasContainer.addEventListener('touchend', (e) => {
       if (e.touches.length < 2) {
         _twoFingerPrevY = null;
+        _twoFingerAccum = 0;
       }
     }, { capture: true });
 
