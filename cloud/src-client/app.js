@@ -9588,6 +9588,9 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     document.addEventListener('keydown', handlePlacementKeyDown);
     document.addEventListener('contextmenu', handlePlacementRightClick);
     canvasContainer.addEventListener('click', handlePlacementClick);
+    // Touch support for mobile placement
+    canvasContainer.addEventListener('touchmove', handlePlacementTouchMove, { passive: false });
+    canvasContainer.addEventListener('touchend', handlePlacementTouchEnd);
   }
 
   function cancelPlacementMode() {
@@ -9599,6 +9602,8 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     document.removeEventListener('keydown', handlePlacementKeyDown);
     document.removeEventListener('contextmenu', handlePlacementRightClick);
     canvasContainer.removeEventListener('click', handlePlacementClick);
+    canvasContainer.removeEventListener('touchmove', handlePlacementTouchMove);
+    canvasContainer.removeEventListener('touchend', handlePlacementTouchEnd);
     placementMode = null;
   }
 
@@ -9646,6 +9651,28 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     if (!placementMode) return;
     e.preventDefault();
     cancelPlacementMode();
+  }
+
+  function handlePlacementTouchMove(e) {
+    if (!placementMode) return;
+    e.preventDefault();
+    const touch = e.touches[0];
+    if (!touch) return;
+    const fakeEvent = { clientX: touch.clientX, clientY: touch.clientY };
+    handlePlacementMouseMove(fakeEvent);
+  }
+
+  function handlePlacementTouchEnd(e) {
+    if (!placementMode) return;
+    const touch = e.changedTouches && e.changedTouches[0];
+    if (!touch) return;
+    const size = placementSizes[placementMode.type];
+    const canvasX = placementMode.snappedX != null ? placementMode.snappedX + size.width / 2 : (touch.clientX - state.panX) / state.zoom;
+    const canvasY = placementMode.snappedY != null ? placementMode.snappedY + size.height / 2 : (touch.clientY - state.panY) / state.zoom;
+    const createFn = placementMode.createFn;
+    removeSnapGuides();
+    cancelPlacementMode();
+    createFn({ x: canvasX, y: canvasY });
   }
 
   function handlePlacementClick(e) {
