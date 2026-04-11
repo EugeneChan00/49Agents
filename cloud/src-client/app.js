@@ -2179,6 +2179,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
       const termInfo = terminals.get(terminalId);
       if (termInfo && info) {
         termInfo._alternateOn = !!info.alternateOn;
+        termInfo._currentCommand = info.command || null;
         // Safety-net: sync copy-mode state from tmux ground truth
         if (termInfo._inCopyMode && !info.inCopyMode) {
           termInfo._inCopyMode = false;
@@ -7893,6 +7894,10 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
       // — send arrow keys so the app scrolls its content
       const termRef = terminals.get(paneData.id);
       if (termRef?._alternateOn) {
+        if (termRef._currentCommand === 'tmux') {
+          xterm.scrollLines(lines);
+          return;
+        }
         const count = Math.abs(lines);
         const arrow = e.deltaY > 0 ? '\x1b[B' : '\x1b[A';
         if (termRef._attached) {
@@ -7905,6 +7910,10 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
 
       // Normal shell — hybrid scroll: local buffer first, tmux copy-mode when exhausted
       const termRef2 = terminals.get(paneData.id);
+      if (termRef2?._currentCommand === 'tmux') {
+        xterm.scrollLines(lines);
+        return;
+      }
       if (lines < 0) {
         // Scrolling UP
         const buf = xterm.buffer.active;
@@ -11674,6 +11683,9 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
                     cancelable: true,
                   }));
                 }
+              } else if (termInfo._currentCommand === 'tmux') {
+                // Nested tmux — xterm buffer only; inner session has its own copy-mode
+                xterm.scrollLines(dir > 0 ? -1 : 1);
               } else {
                 // No mouse reporting — hybrid scroll: local buffer first, tmux copy-mode when exhausted
                 const lines = dir > 0 ? -1 : 1; // dir > 0 = finger moved up = scroll up = negative lines

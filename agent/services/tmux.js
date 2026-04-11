@@ -755,7 +755,7 @@ export class TmuxService {
     for (const id of nonClaudeIds) {
       const info = sessionInfo[id];
       if (!info.isClaude) {
-        results[id] = { isClaude: false, state: null, cwd: info.cwd || null, alternateOn: info.alternateOn, inCopyMode: info.inCopyMode };
+        results[id] = { isClaude: false, state: null, cwd: info.cwd || null, command: info.command || null, alternateOn: info.alternateOn, inCopyMode: info.inCopyMode };
       }
     }
 
