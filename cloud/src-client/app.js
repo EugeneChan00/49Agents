@@ -11566,13 +11566,47 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
     }, { passive: false, capture: true });
     canvasContainer.addEventListener('contextmenu', (e) => e.preventDefault());
 
-    // Capture-phase: intercept 2-finger touch for canvas pan/zoom before xterm or pane handlers
+    // Capture-phase: 2-finger touch on panes -> emulate mouse wheel for terminal scroll
+    // On empty canvas space, 2-finger already works via handleTouchStart
+    let _twoFingerPrevY = null;
+    let _twoFingerPrevX = null;
     canvasContainer.addEventListener('touchstart', (e) => {
       if (e.touches.length === 2) {
-        e.stopPropagation(); // stop xterm/pane from consuming it
-        handleTouchStart(e); // route to canvas pan/zoom handler
+        const onPane = e.target.closest('.pane');
+        if (onPane) {
+          e.preventDefault();
+          e.stopPropagation();
+          _twoFingerPrevY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+          _twoFingerPrevX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        }
       }
     }, { passive: false, capture: true });
+    canvasContainer.addEventListener('touchmove', (e) => {
+      if (e.touches.length === 2 && _twoFingerPrevY !== null) {
+        e.preventDefault();
+        e.stopPropagation();
+        const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+        const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        const deltaY = _twoFingerPrevY - midY;
+        const deltaX = _twoFingerPrevX - midX;
+        _twoFingerPrevY = midY;
+        _twoFingerPrevX = midX;
+        // Dispatch wheel event to the pane so xterm/editor handles scrolling
+        const target = e.target.closest('.pane') || e.target;
+        target.dispatchEvent(new WheelEvent('wheel', {
+          deltaY: deltaY * 2,
+          deltaX: deltaX * 2,
+          bubbles: true,
+          cancelable: true,
+        }));
+      }
+    }, { passive: false, capture: true });
+    canvasContainer.addEventListener('touchend', (e) => {
+      if (e.touches.length < 2) {
+        _twoFingerPrevY = null;
+        _twoFingerPrevX = null;
+      }
+    }, { capture: true });
 
     // Middle mouse button: force canvas pan even over panes (capture phase)
     canvasContainer.addEventListener('mousedown', handleMiddleMousePan, true);
@@ -12658,12 +12692,7 @@ import { initGitGraphDeps, renderGitGraphPane, fetchGitGraphData } from './modul
   let momentumRaf = null;
 
   function handleTouchStart(e) {
-    // Allow 2-finger gestures from anywhere (panes, terminals) for canvas pan/zoom
-    if (e.touches.length === 2) {
-      // Let it through regardless of target
-    } else if (e.target !== canvas && e.target !== canvasContainer) {
-      return;
-    }
+    if (e.target !== canvas && e.target !== canvasContainer) return;
 
     // Cancel any in-flight momentum animation
     if (momentumRaf) { cancelAnimationFrame(momentumRaf); momentumRaf = null; }
