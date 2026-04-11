@@ -87,9 +87,11 @@ app.use(
         frameSrc: ["'self'", "https:"],  // Iframe panes
         objectSrc: ["'none'"],
         baseUri: ["'self'"],
+        upgradeInsecureRequests: null, // Disabled: breaks plain HTTP access over Tailscale/LAN
       },
     },
     crossOriginEmbedderPolicy: false, // Allow embedding iframes in the canvas
+    hsts: config.nodeEnv === "production", // Only enable HSTS in production (breaks plain HTTP over LAN/Tailscale)
   })
 );
 
