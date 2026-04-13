@@ -78,12 +78,32 @@ async function startTtyd(tmuxSession) {
   const port = getAvailablePort();
 
   return new Promise((resolve, reject) => {
+    // `tmux -u` forces UTF-8 on the tmux client regardless of the inherited
+    // locale. Without it, tmux consults LANG/LC_CTYPE to decide whether the
+    // client terminal supports UTF-8 — and if the ttyd parent was started
+    // from an environment with no UTF-8 locale (common inside containers
+    // managed by systemd/s6), tmux falls back to ASCII and downgrades
+    // every Unicode box-drawing and private-use-area glyph to a `_`.
+    // This is what caused "every line starts with _" in the web UI for
+    // prompts (starship) and TUI output (claude-code) while the exact
+    // same tmux pane rendered correctly under a local `docker exec` shell.
+    //
+    // The explicit LANG/LC_ALL on the child env is defence in depth: it
+    // covers any tool ttyd or tmux may invoke downstream (shell rc files,
+    // starship, claude-code) that also consults the locale to decide
+    // whether to emit UTF-8.
+    const childEnv = {
+      ...process.env,
+      LANG: process.env.LANG || 'C.UTF-8',
+      LC_ALL: process.env.LC_ALL || 'C.UTF-8',
+    };
     const ttyd = spawn('ttyd', [
       '-p', String(port),
       '-W',
-      'tmux', 'attach-session', '-t', tmuxSession,
+      'tmux', '-u', 'attach-session', '-t', tmuxSession,
     ], {
       stdio: ['ignore', 'pipe', 'pipe'],
+      env: childEnv,
     });
 
     ttyd.stderr?.on('data', (data) => {
