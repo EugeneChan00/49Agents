@@ -1,0 +1,114 @@
+name: release
+
+# Produces the 49-agent install tarball as a GitHub Release asset so
+# downstream installers (install.sh, agent-stack svc-49agents-agent,
+# remote deploy scripts) can curl a stable, versioned artifact instead
+# of rebuilding from source on every container boot.
+#
+# Trigger:
+#   - push of a tag matching v*            → real release
+#   - manual workflow_dispatch with a tag  → ad-hoc / re-run
+#
+# Artifact shape:
+#   49-agent-node${NODE_MAJOR}-linux-x64.tar.gz
+#     agent/
+#       bin/49-agent.js
+#       src/**
+#       node_modules/**   ← pre-installed against the pinned Node ABI
+#       package.json
+#       .node-abi         ← stamp file install.sh reads to refuse mismatched Node
+#
+# The Node major version is baked into the filename so a consumer can
+# pick the correct asset for its runtime — no in-place rebuilds.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.2.3-fork.1)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-agent-tarball:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: ['22']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Building release for ${TAG}"
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install agent dependencies (production only)
+        working-directory: agent
+        run: |
+          npm install --omit=dev --no-audit --no-fund
+          node -p 'process.versions.modules' > .node-abi
+          node -p 'process.version' >> .node-abi
+          echo "Agent node_modules built against Node $(node -v), ABI $(node -p 'process.versions.modules')"
+
+      - name: Build agent tarball
+        id: pack
+        run: |
+          NODE_MAJOR="${{ matrix.node-version }}"
+          TARBALL="49-agent-node${NODE_MAJOR}-linux-x64.tar.gz"
+          tar --owner=0 --group=0 -czf "${TARBALL}" agent/
+          SIZE=$(stat -c%s "${TARBALL}")
+          SHA=$(sha256sum "${TARBALL}" | awk '{print $1}')
+          echo "tarball=${TARBALL}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "size=${SIZE}" >> "$GITHUB_OUTPUT"
+          echo "${SHA}  ${TARBALL}" > "${TARBALL}.sha256"
+          echo "::notice title=tarball::${TARBALL} (${SIZE} bytes, sha256=${SHA})"
+
+      - name: Upload build artifact (workflow retention)
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-tarball-node${{ matrix.node-version }}
+          path: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.tarball }}.sha256
+          retention-days: 14
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.tarball }}.sha256
+          body: |
+            Automated release built from tag `${{ steps.tag.outputs.tag }}`.
+
+            **Agent tarball**
+            - File: `${{ steps.pack.outputs.tarball }}`
+            - Size: `${{ steps.pack.outputs.size }}` bytes
+            - sha256: `${{ steps.pack.outputs.sha256 }}`
+            - Built against: Node ${{ matrix.node-version }} (linux-x64)
+
+            The tarball contains `agent/` with pre-installed `node_modules` and a
+            `.node-abi` stamp. Consumers (install.sh, agent-stack supervisors)
+            should verify the stamp matches their runtime Node before extracting.
